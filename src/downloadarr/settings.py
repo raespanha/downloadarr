@@ -1,3 +1,5 @@
+import json
+import os
 from pathlib import Path
 
 from pydantic import AliasChoices, Field, SecretStr, field_validator
@@ -38,3 +40,25 @@ class Settings(BaseSettings):
         if value <= 0:
             raise ValueError("timeout and polling intervals must be positive")
         return value
+
+
+def load_settings(path: str | os.PathLike[str] | None = None) -> Settings:
+    """Load backup-friendly JSON settings, with environment variables winning."""
+    configured_path = Path(path or os.environ.get("DOWNLOADARR_CONFIG", "config/settings.json"))
+    values: dict = {}
+    if configured_path.is_file():
+        try:
+            raw = json.loads(configured_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise ValueError(f"invalid Downloadarr settings file: {configured_path}") from error
+        if not isinstance(raw, dict):
+            raise ValueError(f"Downloadarr settings file must contain a JSON object: {configured_path}")
+        values.update(raw)
+
+    # Explicit environment variables override file values for containers and
+    # one-off deployments without forcing secrets into the JSON backup.
+    for name, field in Settings.model_fields.items():
+        alias = field.validation_alias
+        if isinstance(alias, str) and alias in os.environ:
+            values[name] = os.environ[alias]
+    return Settings(**values)

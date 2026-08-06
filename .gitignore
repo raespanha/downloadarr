@@ -1,5 +1,9 @@
 .venv/
 venv/
+.env
+config/settings.json
+config/*.db
+config/*.db-*
 __pycache__/
 *.py[cod]
 .pytest_cache/

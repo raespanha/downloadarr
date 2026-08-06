@@ -9,7 +9,7 @@ from downloadarr.api import create_app
 from downloadarr.db.models import JobState
 from downloadarr.providers.base import (ProviderQueuedTorrent, ProviderSubmission,
                                         ProviderError, ProviderTorrent)
-from downloadarr.settings import Settings
+from downloadarr.settings import Settings, load_settings
 
 HASH = "0123456789abcdef0123456789abcdef01234567"
 MAGNET = f"magnet:?xt=urn:btih:{HASH}&dn=Test.Release"
@@ -197,3 +197,21 @@ def test_settings_redact_secrets(tmp_path):
                                                         "api_key": SecretStr("api-secret")})
     rendered = repr(configured)
     assert "top-secret" not in rendered and "api-secret" not in rendered
+
+
+def test_json_settings_with_environment_override(tmp_path, monkeypatch):
+    path = tmp_path / "settings.json"
+    path.write_text('{"username":"from-file","torbox_api_token":"file-secret",'
+                    '"provider_concurrency":2}', encoding="utf-8")
+    monkeypatch.setenv("DOWNLOADARR_USERNAME", "from-environment")
+    configured = load_settings(path)
+    assert configured.username == "from-environment"
+    assert configured.provider_concurrency == 2
+    assert configured.torbox_api_token.get_secret_value() == "file-secret"
+
+
+def test_invalid_json_settings_are_rejected(tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text("not-json", encoding="utf-8")
+    with pytest.raises(ValueError, match="invalid Downloadarr settings file"):
+        load_settings(path)

@@ -291,7 +291,15 @@ into a normal torrent record.
 
 ## Configuration
 
-Initial environment variables:
+Downloadarr loads `config/settings.json` by default. Set `DOWNLOADARR_CONFIG`
+to use another path. Environment variables override values in the JSON file,
+which makes the same configuration suitable for local and container use.
+
+Copy `settings.example.json` to `config/settings.json`; the real file is
+ignored by Git because it contains secrets. Back up this file through the
+future `/config` volume rather than committing it.
+
+Supported environment variables:
 
 ```text
 DOWNLOADARR_DATABASE_URL=sqlite+aiosqlite:///data/downloadarr.db
