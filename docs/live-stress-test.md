@@ -55,6 +55,22 @@ The exercise exposed and fixed three integration defects:
 
 Regression tests cover each corrected behavior where applicable.
 
+## Four versus eight connections
+
+A second run used the same cached torrent, destination, host, and verification
+procedure with the provider ceiling temporarily raised to eight connections.
+
+| Connections | End-to-end time | Observed behavior |
+|---:|---:|---|
+| 4 | approximately 44 seconds | Stable near 18 MiB/s |
+| 8 | 187.76 seconds | Initial recoverable stall; later bursts up to 12.7 MiB/s |
+
+The eight-connection run had an effective end-to-end rate of roughly 4 MiB/s,
+completed with the correct byte count and SHA-256, and left no temporary files.
+This is a single-route sample rather than a statistically controlled network
+benchmark, but it strongly supports retaining TorBox's four-connection ceiling.
+The live setting was restored to four after cleanup.
+
 ## Future UI test
 
 The future UI speed test should call the same delivery service and add explicit
