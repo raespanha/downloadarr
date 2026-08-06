@@ -1,11 +1,16 @@
 import json
+import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path, PurePosixPath
 
 from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 
+from ..config import DownloadConfig
 from ..db.engine import Database
-from ..db.models import Category, Job, JobState, ProviderJob
+from ..db.models import Category, DeliveryFile, Job, JobState, ProviderJob
+from ..downloader import Downloader
+from ..errors import DownloadError
 from ..magnets import MagnetInfo
 from ..providers.base import ProviderError, TorrentProvider
 
@@ -13,10 +18,13 @@ from ..providers.base import ProviderError, TorrentProvider
 class JobService:
     def __init__(self, database: Database, provider: TorrentProvider, *,
                  poll_interval: float = 5.0, queued_poll_interval: float = 30.0,
-                 max_backoff: float = 300.0) -> None:
+                 max_backoff: float = 300.0, download_path: Path = Path("/downloads"),
+                 download_connections: int = 4, downloader: Downloader | None = None) -> None:
         self.database, self.provider = database, provider
         self.poll_interval, self.queued_poll_interval = poll_interval, queued_poll_interval
         self.max_backoff = max_backoff
+        self.download_path = Path(download_path)
+        self.downloader = downloader or Downloader(DownloadConfig(connections=download_connections))
 
     async def add_magnet(self, magnet: MagnetInfo, category_name: str | None) -> Job:
         async with self.database.session() as session:
@@ -70,7 +78,7 @@ class JobService:
             return await session.scalar(select(Job).where(Job.info_hash == info_hash.lower()))
 
     async def due_job_ids(self, limit: int = 100) -> list[str]:
-        terminal = [JobState.PROVIDER_READY.value, JobState.FAILED.value]
+        terminal = [JobState.COMPLETED.value, JobState.FAILED.value]
         statement = (select(Job.id).where(Job.state.not_in(terminal),
                     or_(Job.next_poll_at.is_(None), Job.next_poll_at <= _now()))
                     .order_by(Job.next_poll_at).limit(limit))
@@ -80,11 +88,17 @@ class JobService:
     async def process(self, job_id: str) -> None:
         async with self.database.session() as session:
             job = await session.get(Job, job_id)
-            if job is None or job.state in (JobState.PROVIDER_READY.value, JobState.FAILED.value):
+            if job is None or job.state in (JobState.COMPLETED.value, JobState.FAILED.value):
                 return
             try:
                 if job.provider_job.remote_id is not None:
-                    await self._poll_remote(job)
+                    if job.delivery_files:
+                        job.state = JobState.DELIVERING.value
+                        await self._deliver(job, session)
+                    elif job.state == JobState.PROVIDER_READY.value:
+                        await self._prepare_delivery(job)
+                    else:
+                        await self._poll_remote(job)
                 elif job.provider_job.queued_id is not None:
                     await self._poll_queued(job)
                 else:
@@ -102,6 +116,16 @@ class JobService:
                 else:
                     job.state = JobState.FAILED.value
                     job.next_poll_at = None
+            except DownloadError as error:
+                job.poll_failures += 1
+                job.error_code, job.error_message = "DOWNLOAD_FAILED", str(error)[:512]
+                job.state = JobState.RETRY_WAIT.value
+                job.next_poll_at = _now() + timedelta(seconds=min(
+                    self.poll_interval * (2 ** (job.poll_failures - 1)), self.max_backoff))
+            except (OSError, ValueError) as error:
+                job.poll_failures += 1
+                job.error_code, job.error_message = "DELIVERY_FAILED", str(error)[:512]
+                job.state, job.next_poll_at = JobState.FAILED.value, None
             await session.commit()
 
     async def _submit(self, job: Job) -> None:
@@ -143,11 +167,139 @@ class JobService:
         job.provider_job.last_polled_at = _now()
         job.provider_job.payload = json.dumps({"download_present": torrent.download_present})
         if torrent.download_finished and torrent.download_present:
-            job.state, job.progress, job.next_poll_at = JobState.PROVIDER_READY.value, 1.0, None
+            job.state, job.progress, job.next_poll_at = JobState.PROVIDER_READY.value, 0.0, _now()
         else:
             job.state = JobState.PROVIDER_DOWNLOADING.value
             job.next_poll_at = _now() + timedelta(seconds=self.poll_interval)
 
+    async def _prepare_delivery(self, job: Job) -> None:
+        files = await self.provider.get_files(job.provider_job.remote_id)
+        if not job.delivery_files:
+            relative_paths = _delivery_paths(job.name or job.info_hash, files)
+            job.delivery_files = [DeliveryFile(
+                provider_file_id=item.file_id, relative_path=relative,
+                size=item.size, downloaded=0, state="pending")
+                for item, relative in zip(files, relative_paths, strict=True)]
+        job.size = sum(item.size for item in job.delivery_files)
+        job.progress = (sum(item.downloaded for item in job.delivery_files) / job.size
+                        if job.size else 1.0)
+        job.download_speed, job.eta = 0, None
+        job.state, job.next_poll_at = JobState.DELIVERING.value, _now()
+
+    async def _deliver(self, job: Job, session) -> None:
+        base = Path(job.category.save_path) if job.category else self.download_path
+        total = sum(item.size for item in job.delivery_files)
+        for item in job.delivery_files:
+            destination = _safe_destination(base, item.relative_path)
+            if destination.exists():
+                if destination.is_file() and destination.stat().st_size == item.size:
+                    item.downloaded, item.state, item.error_message = item.size, "completed", None
+                    continue
+                raise ValueError(f"delivery destination already exists: {item.relative_path}")
+            item.state, item.error_message = "downloading", None
+            prior = sum(value.downloaded for value in job.delivery_files if value is not item)
+            last_checkpoint = 0.0
+
+            async def url_provider(refresh: bool, file_id=item.provider_file_id) -> str:
+                return await self.provider.request_download(job.provider_job.remote_id, file_id)
+
+            async def progress(value) -> None:
+                nonlocal last_checkpoint
+                item.downloaded = min(value.downloaded_bytes, item.size)
+                job.progress = ((prior + item.downloaded) / total if total else 1.0)
+                speed = value.downloaded_bytes / value.elapsed if value.elapsed else 0
+                job.download_speed = int(speed)
+                remaining = max(total - prior - item.downloaded, 0)
+                job.eta = int(remaining / speed) if speed else None
+                now = time.monotonic()
+                if now - last_checkpoint >= 1.0:
+                    last_checkpoint = now
+                    await session.commit()
+
+            result = await self.downloader.download(url_provider, destination, progress)
+            if result.byte_count != item.size:
+                raise ValueError(f"downloaded size mismatch for {item.relative_path}")
+            item.downloaded, item.state = result.byte_count, "completed"
+            completed = sum(value.downloaded for value in job.delivery_files)
+            job.progress = completed / total if total else 1.0
+            job.download_speed = int(result.average_speed)
+        job.state, job.progress = JobState.COMPLETED.value, 1.0
+        job.download_speed, job.eta = 0, 0
+        job.completed_at, job.next_poll_at = _now(), None
+
+    async def remove(self, hashes: list[str], delete_files: bool) -> None:
+        normalized = [value.lower() for value in hashes]
+        async with self.database.session() as session:
+            jobs = list((await session.scalars(
+                select(Job).where(Job.info_hash.in_(normalized)))).unique().all())
+            for job in jobs:
+                if job.state not in (JobState.COMPLETED.value, JobState.FAILED.value):
+                    raise ValueError("active jobs cannot be removed yet")
+                if delete_files:
+                    base = Path(job.category.save_path) if job.category else self.download_path
+                    for item in job.delivery_files:
+                        destination = _safe_destination(base, item.relative_path)
+                        destination.unlink(missing_ok=True)
+                        _remove_empty_parents(destination.parent, base.resolve())
+                await session.delete(job)
+            await session.commit()
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _delivery_paths(torrent_name: str, files) -> list[str]:
+    parsed = [_safe_provider_path(item.path) for item in files]
+    if len(parsed) == 1:
+        return [parsed[0].name]
+    root = _safe_component(torrent_name)
+    result = []
+    for path in parsed:
+        parts = list(path.parts)
+        if parts and parts[0].casefold() == root.casefold():
+            parts = parts[1:]
+        if not parts:
+            raise ValueError("provider file path has no filename")
+        result.append(str(PurePosixPath(root, *parts)))
+    if len(set(result)) != len(result):
+        raise ValueError("provider returned duplicate file paths")
+    return result
+
+
+def _safe_provider_path(value: str) -> PurePosixPath:
+    if "\0" in value:
+        raise ValueError("provider file path contains a null byte")
+    path = PurePosixPath(value.replace("\\", "/"))
+    if path.is_absolute() or not path.parts or any(part in ("", ".", "..") for part in path.parts):
+        raise ValueError("provider file path is unsafe")
+    if ":" in path.parts[0]:
+        raise ValueError("provider file path contains a drive prefix")
+    return path
+
+
+def _safe_component(value: str) -> str:
+    component = value.replace("/", "_").replace("\\", "_").strip(" .")
+    if not component or component in (".", "..") or "\0" in component or ":" in component:
+        raise ValueError("torrent name is unsafe for a local path")
+    return component
+
+
+def _safe_destination(base: Path, relative: str) -> Path:
+    root = base.expanduser().resolve()
+    path = _safe_provider_path(relative)
+    destination = root.joinpath(*path.parts).resolve()
+    try:
+        destination.relative_to(root)
+    except ValueError as error:
+        raise ValueError("delivery destination escapes its configured root") from error
+    return destination
+
+
+def _remove_empty_parents(path: Path, base: Path) -> None:
+    while path != base:
+        try:
+            path.rmdir()
+        except (FileNotFoundError, OSError):
+            return
+        path = path.parent

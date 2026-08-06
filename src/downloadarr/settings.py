@@ -19,8 +19,9 @@ class DownloadSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
     path: Path = Path("/downloads")
     connections: int = 8
+    provider_max_connections: int = 4
 
-    @field_validator("connections")
+    @field_validator("connections", "provider_max_connections")
     @classmethod
     def valid_connections(cls, value: int) -> int:
         if not 1 <= value <= 256:
@@ -152,6 +153,7 @@ ENVIRONMENT_OVERRIDES: dict[str, tuple[str, ...]] = {
     "DOWNLOADARR_DATABASE_URL": ("database", "url"),
     "DOWNLOADARR_DOWNLOAD_PATH": ("download", "path"),
     "DOWNLOADARR_CONNECTIONS": ("download", "connections"),
+    "DOWNLOADARR_PROVIDER_MAX_CONNECTIONS": ("download", "provider_max_connections"),
     "DOWNLOADARR_USERNAME": ("qbittorrent", "username"),
     "DOWNLOADARR_PASSWORD": ("qbittorrent", "password"),
     "DOWNLOADARR_API_KEY": ("qbittorrent", "api_key"),
@@ -239,6 +241,7 @@ def _migrate_flat_settings(raw: dict[str, Any]) -> dict[str, Any]:
     mapping = {
         "database_url": ("database", "url"),
         "download_path": ("download", "path"),
+        "provider_max_connections": ("download", "provider_max_connections"),
         "username": ("qbittorrent", "username"),
         "password": ("qbittorrent", "password"),
         "api_key": ("qbittorrent", "api_key"),

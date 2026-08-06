@@ -44,7 +44,8 @@ Backing up `/config` preserves both settings and the SQLite database.
   },
   "download": {
     "path": "/downloads",
-    "connections": 8
+    "connections": 8,
+    "provider_max_connections": 4
   },
   "qbittorrent": {
     "username": "downloadarr",
@@ -86,6 +87,7 @@ SQLite is the supported database for the initial release.
 |---|---|---|
 | `path` | path | Local/container-visible completed download root |
 | `connections` | integer | Between 1 and 256 |
+| `provider_max_connections` | integer | Provider-specific connection ceiling; TorBox recommends 4 |
 
 ### qBittorrent facade
 
@@ -127,6 +129,7 @@ Environment variables take precedence over the JSON document:
 | `DOWNLOADARR_DATABASE_URL` | `database.url` |
 | `DOWNLOADARR_DOWNLOAD_PATH` | `download.path` |
 | `DOWNLOADARR_CONNECTIONS` | `download.connections` |
+| `DOWNLOADARR_PROVIDER_MAX_CONNECTIONS` | `download.provider_max_connections` |
 | `DOWNLOADARR_USERNAME` | `qbittorrent.username` |
 | `DOWNLOADARR_PASSWORD` | `qbittorrent.password` |
 | `DOWNLOADARR_API_KEY` | `qbittorrent.api_key` |

@@ -5,7 +5,7 @@ from typing import Any
 
 import aiohttp
 
-from .base import (ProviderError, ProviderQueuedTorrent, ProviderSubmission,
+from .base import (ProviderError, ProviderFile, ProviderQueuedTorrent, ProviderSubmission,
                    ProviderTorrent)
 
 
@@ -87,6 +87,41 @@ class TorBoxProvider:
             ))
         return result
 
+    async def get_files(self, remote_id: int) -> list[ProviderFile]:
+        data = await self._request("GET", "/torrents/mylist",
+                                   params={"id": remote_id, "bypass_cache": "true"})
+        if isinstance(data, list):
+            data = data[0] if data else None
+        if not isinstance(data, dict) or not isinstance(data.get("files"), list):
+            raise ProviderError("INVALID_RESPONSE", "TorBox torrent files are invalid",
+                                transient=True)
+        files = []
+        for item in data["files"]:
+            if not isinstance(item, dict):
+                raise ProviderError("INVALID_RESPONSE", "TorBox torrent file is invalid",
+                                    transient=True)
+            path = item.get("name") or item.get("short_name")
+            if not isinstance(path, str) or not path:
+                raise ProviderError("INVALID_RESPONSE", "TorBox torrent file path is invalid",
+                                    transient=True)
+            files.append(ProviderFile(
+                _integer(item.get("id"), "file.id"), path,
+                max(0, _integer(item.get("size"), "file.size"))))
+        if not files:
+            raise ProviderError("INVALID_RESPONSE", "TorBox torrent contains no files",
+                                transient=True)
+        return files
+
+    async def request_download(self, remote_id: int, file_id: int) -> str:
+        data = await self._request("GET", "/torrents/requestdl", params={
+            "token": self._token, "torrent_id": remote_id, "file_id": file_id,
+            "zip_link": "false", "redirect": "false", "append_name": "false",
+        })
+        if not isinstance(data, str) or not data.startswith(("https://", "http://")):
+            raise ProviderError("INVALID_RESPONSE", "TorBox returned an invalid download URL",
+                                transient=True)
+        return data
+
     async def _request(self, method: str, path: str, **kwargs) -> Any:
         try:
             async with self._session.request(method, self._base + path, **kwargs) as response:
@@ -125,21 +160,21 @@ class TorBoxProvider:
 
 
 def _torrent(data: dict, fallback_id: int | None = None) -> ProviderTorrent:
-        progress = float(data.get("progress") or 0)
-        if progress > 1:
-            progress /= 100
-        return ProviderTorrent(
-            remote_id=_integer(data.get("id", fallback_id), "id"),
-            info_hash=str(data.get("hash") or "").lower(),
-            name=str(data.get("name") or "Unnamed torrent")[:512],
-            state=str(data.get("download_state") or "unknown")[:64],
-            size=max(0, _integer(data.get("size", 0), "size")),
-            progress=min(max(progress, 0.0), 1.0),
-            download_speed=max(0, _integer(data.get("download_speed", 0), "download_speed")),
-            eta=_optional_integer(data.get("eta"), "eta"),
-            download_finished=bool(data.get("download_finished")),
-            download_present=bool(data.get("download_present")),
-        )
+    progress = float(data.get("progress") or 0)
+    if progress > 1:
+        progress /= 100
+    return ProviderTorrent(
+        remote_id=_integer(data.get("id", fallback_id), "id"),
+        info_hash=str(data.get("hash") or "").lower(),
+        name=str(data.get("name") or "Unnamed torrent")[:512],
+        state=str(data.get("download_state") or "unknown")[:64],
+        size=max(0, _integer(data.get("size", 0), "size")),
+        progress=min(max(progress, 0.0), 1.0),
+        download_speed=max(0, _integer(data.get("download_speed", 0), "download_speed")),
+        eta=_optional_integer(data.get("eta"), "eta"),
+        download_finished=bool(data.get("download_finished")),
+        download_present=bool(data.get("download_present")),
+    )
 
 
 def _integer(value: Any, field: str) -> int:

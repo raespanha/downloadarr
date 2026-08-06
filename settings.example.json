@@ -5,7 +5,8 @@
   },
   "download": {
     "path": "/downloads",
-    "connections": 8
+    "connections": 8,
+    "provider_max_connections": 4
   },
   "qbittorrent": {
     "username": "downloadarr",

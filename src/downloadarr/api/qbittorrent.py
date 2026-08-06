@@ -111,9 +111,21 @@ async def torrent_properties(request: Request, hash: str,
         raise HTTPException(status_code=404, detail="Torrent not found")
     save_path = job.category.save_path if job.category else request.app.state.settings.download_path.as_posix()
     return {"save_path": save_path, "creation_date": int(job.created_at.timestamp()),
-            "completion_date": -1, "addition_date": int(job.created_at.timestamp()),
+            "completion_date": int(job.completed_at.timestamp()) if job.completed_at else -1,
+            "addition_date": int(job.created_at.timestamp()),
             "total_downloaded": int((job.size or 0) * job.progress), "total_uploaded": 0,
             "seeds": 0, "peers": 0, "share_ratio": 0}
+
+
+@router.get("/api/v2/torrents/files", dependencies=[Depends(require_auth)])
+async def torrent_files(hash: str, job_service: JobService = Depends(service)) -> list[dict]:
+    job = await job_service.job(hash)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Torrent not found")
+    return [{"index": index, "name": item.relative_path, "size": item.size,
+             "progress": item.downloaded / item.size if item.size else 1.0,
+             "priority": 1, "is_seed": True, "availability": 1.0}
+            for index, item in enumerate(job.delivery_files)]
 
 
 def _torrent_json(job: Job, default_save_path: str) -> dict:
@@ -127,12 +139,42 @@ def _torrent_json(job: Job, default_save_path: str) -> dict:
         JobState.PROVIDER_DOWNLOADING.value: "downloading",
         JobState.RETRY_WAIT.value: "stalledDL",
         JobState.PROVIDER_READY.value: "queuedDL",
+        JobState.DELIVERING.value: "downloading",
+        JobState.COMPLETED.value: "stalledUP",
         JobState.FAILED.value: "error",
     }
+    if len(job.delivery_files) == 1:
+        content_path = str(PurePosixPath(save_path) / job.delivery_files[0].relative_path)
+    elif job.delivery_files:
+        root = PurePosixPath(job.delivery_files[0].relative_path).parts[0]
+        content_path = str(PurePosixPath(save_path) / root)
+    else:
+        content_path = str(PurePosixPath(save_path) / name)
     return {"hash": job.info_hash, "name": name, "size": size,
             "progress": min(max(job.progress, 0), 1), "state": state_map[job.state],
             "category": job.category.name if job.category else "", "save_path": save_path,
-            "content_path": str(PurePosixPath(save_path) / name),
+            "content_path": content_path,
             "amount_left": size - completed, "completed": completed,
-            "dlspeed": job.download_speed, "upspeed": 0, "eta": job.eta or 8640000,
-            "ratio": 0, "added_on": int(job.created_at.timestamp())}
+            "dlspeed": job.download_speed, "upspeed": 0,
+            "eta": job.eta if job.eta is not None else 8640000,
+            "ratio": 0, "added_on": int(job.created_at.timestamp()),
+            "completion_on": int(job.completed_at.timestamp()) if job.completed_at else 0}
+
+
+@router.post("/api/v2/torrents/delete", dependencies=[Depends(require_auth)])
+async def delete_torrents(request: Request,
+                          job_service: JobService = Depends(service)) -> Response:
+    form = await request.form()
+    raw_hashes = str(form.get("hashes", ""))
+    if not raw_hashes:
+        return PlainTextResponse("Fails.", status_code=400)
+    if raw_hashes == "all":
+        hashes = [job.info_hash for job in await job_service.jobs()]
+    else:
+        hashes = [value for value in raw_hashes.split("|") if value]
+    delete_files = str(form.get("deleteFiles", "false")).lower() == "true"
+    try:
+        await job_service.remove(hashes, delete_files)
+    except ValueError:
+        return PlainTextResponse("Fails.", status_code=400)
+    return Response(status_code=200)

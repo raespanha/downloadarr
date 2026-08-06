@@ -65,6 +65,30 @@ async def test_current_queued_endpoint_and_parameters(torbox_server):
         await provider.close()
 
 
+async def test_file_discovery_and_signed_download_request(torbox_server):
+    async def handler(request):
+        if request.path.endswith("/mylist"):
+            assert request.query["id"] == "42"
+            return web.json_response({"success": True, "data": {"id": 42, "files": [
+                {"id": 3, "name": "Release/video.mkv", "short_name": "video.mkv", "size": 99}
+            ]}})
+        assert request.path.endswith("/requestdl")
+        assert request.query["torrent_id"] == "42"
+        assert request.query["file_id"] == "3"
+        assert request.query["token"] == "secret"
+        return web.json_response({"success": True,
+                                  "data": "https://cdn.example.test/signed?private=value"})
+    provider = TorBoxProvider("secret", await torbox_server(handler))
+    try:
+        files = await provider.get_files(42)
+        assert files[0].file_id == 3
+        assert files[0].path == "Release/video.mkv"
+        assert files[0].size == 99
+        assert (await provider.request_download(42, 3)).startswith("https://cdn.example.test/")
+    finally:
+        await provider.close()
+
+
 @pytest.mark.parametrize("status,transient", [(401, False), (403, False), (422, False),
                                                 (429, True), (502, True)])
 async def test_torbox_error_classification(torbox_server, status, transient):

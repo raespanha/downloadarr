@@ -7,9 +7,10 @@ from pydantic import SecretStr
 
 from downloadarr.api import create_app
 from downloadarr.db.models import JobState
-from downloadarr.providers.base import (ProviderQueuedTorrent, ProviderSubmission,
+from downloadarr.providers.base import (ProviderFile, ProviderQueuedTorrent, ProviderSubmission,
                                         ProviderError, ProviderTorrent)
 from downloadarr.settings import Settings, SettingsService, load_settings
+from downloadarr.state import DownloadResult
 
 HASH = "0123456789abcdef0123456789abcdef01234567"
 MAGNET = f"magnet:?xt=urn:btih:{HASH}&dn=Test.Release"
@@ -21,6 +22,8 @@ class FakeProvider:
         self.torrent = ProviderTorrent(42, HASH, "Test.Release", "downloading", 1000,
                                        0.4, 100, 6, False, True)
         self.queued = []
+        self.files = [ProviderFile(0, "Test.Release.mkv", 5)]
+        self.download_requests = []
         self.closed = False
 
     async def create_magnet(self, magnet):
@@ -37,8 +40,31 @@ class FakeProvider:
     async def get_queued(self):
         return self.queued
 
+    async def get_files(self, remote_id):
+        assert remote_id == 42
+        return self.files
+
+    async def request_download(self, remote_id, file_id):
+        self.download_requests.append((remote_id, file_id))
+        return "https://example.test/signed"
+
     async def close(self):
         self.closed = True
+
+
+class FakeDownloader:
+    def __init__(self, payload=b"hello"):
+        self.payload = payload
+        self.destinations = []
+
+    async def download(self, url_provider, destination, progress_callback=None):
+        await url_provider(False)
+        destination = Path(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(self.payload)
+        self.destinations.append(destination)
+        return DownloadResult(destination, len(self.payload), 0.1, len(self.payload) * 10,
+                              False, True)
 
 
 def settings(tmp_path: Path) -> Settings:
@@ -52,9 +78,10 @@ def settings(tmp_path: Path) -> Settings:
 
 
 @asynccontextmanager
-async def client_for(tmp_path, provider=None):
+async def client_for(tmp_path, provider=None, downloader=None):
     fake = provider or FakeProvider()
-    app = create_app(settings(tmp_path), fake, start_poller=False)
+    app = create_app(settings(tmp_path), fake, start_poller=False,
+                     downloader=downloader or FakeDownloader())
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
                                      base_url="http://test") as client:
@@ -118,6 +145,91 @@ async def test_provider_transitions_never_report_local_completion(tmp_path):
         value = (await client.get("/api/v2/torrents/info")).json()[0]
         assert value["state"] == "queuedDL"
         assert (await app.state.job_service.job(HASH)).state == JobState.PROVIDER_READY.value
+
+
+async def test_ready_torrent_is_delivered_before_reporting_completion(tmp_path):
+    provider, downloader = FakeProvider(), FakeDownloader()
+    provider.torrent = ProviderTorrent(42, HASH, "Test.Release", "cached", 5,
+                                       1, 0, 0, True, True)
+    async with client_for(tmp_path, provider, downloader) as (client, app, provider):
+        await login(client)
+        await client.post("/api/v2/torrents/add", data={"urls": MAGNET})
+        job = (await app.state.job_service.jobs())[0]
+        await app.state.job_service.process(job.id)  # submit
+        await app.state.job_service.process(job.id)  # provider ready
+        assert (await app.state.job_service.job(HASH)).state == JobState.PROVIDER_READY.value
+        await app.state.job_service.process(job.id)  # discover files
+        assert (await app.state.job_service.job(HASH)).state == JobState.DELIVERING.value
+        await app.state.job_service.process(job.id)  # local delivery
+        completed = await app.state.job_service.job(HASH)
+        assert completed.state == JobState.COMPLETED.value
+        assert completed.completed_at is not None
+        assert completed.delivery_files[0].state == "completed"
+        value = (await client.get("/api/v2/torrents/info")).json()[0]
+        assert value["state"] == "stalledUP" and value["progress"] == 1
+        assert value["content_path"].endswith("/Test.Release.mkv")
+        files = (await client.get(f"/api/v2/torrents/files?hash={HASH}")).json()
+        assert files == [{"index": 0, "name": "Test.Release.mkv", "size": 5,
+                          "progress": 1.0, "priority": 1, "is_seed": True,
+                          "availability": 1.0}]
+        assert downloader.destinations[0].read_bytes() == b"hello"
+        properties = (await client.get(f"/api/v2/torrents/properties?hash={HASH}")).json()
+        assert properties["completion_date"] > 0
+
+
+async def test_delete_endpoint_optionally_removes_delivered_files(tmp_path):
+    provider, downloader = FakeProvider(), FakeDownloader()
+    provider.torrent = ProviderTorrent(42, HASH, "Test.Release", "cached", 5,
+                                       1, 0, 0, True, True)
+    async with client_for(tmp_path, provider, downloader) as (client, app, provider):
+        await login(client)
+        await client.post("/api/v2/torrents/add", data={"urls": MAGNET})
+        job = (await app.state.job_service.jobs())[0]
+        for _ in range(4):
+            await app.state.job_service.process(job.id)
+        delivered = downloader.destinations[0]
+        response = await client.post("/api/v2/torrents/delete",
+                                     data={"hashes": HASH, "deleteFiles": "true"})
+        assert response.status_code == 200
+        assert not delivered.exists()
+        assert await app.state.job_service.job(HASH) is None
+
+
+async def test_unsafe_provider_file_path_fails_without_writing(tmp_path):
+    provider = FakeProvider()
+    provider.torrent = ProviderTorrent(42, HASH, "Test.Release", "cached", 5,
+                                       1, 0, 0, True, True)
+    provider.files = [ProviderFile(0, "../outside.mkv", 5)]
+    async with client_for(tmp_path, provider) as (client, app, provider):
+        await login(client)
+        await client.post("/api/v2/torrents/add", data={"urls": MAGNET})
+        job = (await app.state.job_service.jobs())[0]
+        for _ in range(3):
+            await app.state.job_service.process(job.id)
+        failed = await app.state.job_service.job(HASH)
+        assert failed.state == JobState.FAILED.value
+        assert failed.error_code == "DELIVERY_FAILED"
+        assert not (tmp_path / "outside.mkv").exists()
+
+
+async def test_restart_resumes_persisted_delivery(tmp_path):
+    first = FakeProvider()
+    first.torrent = ProviderTorrent(42, HASH, "Test.Release", "cached", 5,
+                                    1, 0, 0, True, True)
+    async with client_for(tmp_path, first) as (client, app, provider):
+        await login(client)
+        await client.post("/api/v2/torrents/add", data={"urls": MAGNET})
+        job = (await app.state.job_service.jobs())[0]
+        for _ in range(3):
+            await app.state.job_service.process(job.id)
+        assert (await app.state.job_service.job(HASH)).state == JobState.DELIVERING.value
+    second, downloader = FakeProvider(), FakeDownloader()
+    async with client_for(tmp_path, second, downloader) as (client, app, provider):
+        job = await app.state.job_service.job(HASH)
+        assert len(job.delivery_files) == 1
+        await app.state.job_service.process(job.id)
+        assert (await app.state.job_service.job(HASH)).state == JobState.COMPLETED.value
+        assert downloader.destinations[0].is_file()
 
 
 async def test_properties_and_filters(tmp_path):

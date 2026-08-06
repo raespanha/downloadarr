@@ -4,6 +4,7 @@ import uvicorn
 from fastapi import FastAPI
 
 from ..db.engine import Database
+from ..downloader import Downloader
 from ..jobs import JobPoller, JobService
 from ..providers.base import TorrentProvider
 from ..providers.torbox import TorBoxProvider
@@ -13,7 +14,7 @@ from .qbittorrent import router
 
 
 def create_app(settings: Settings | None = None, provider: TorrentProvider | None = None,
-               *, start_poller: bool = True) -> FastAPI:
+               *, start_poller: bool = True, downloader: Downloader | None = None) -> FastAPI:
     configured = settings or load_settings()
     settings_service = SettingsService()
 
@@ -29,7 +30,11 @@ def create_app(settings: Settings | None = None, provider: TorrentProvider | Non
             configured.torbox_request_timeout)
         job_service = JobService(database, actual_provider, poll_interval=configured.poll_interval,
                                  queued_poll_interval=configured.queued_poll_interval,
-                                 max_backoff=configured.max_poll_backoff)
+                                 max_backoff=configured.max_poll_backoff,
+                                 download_path=configured.download_path,
+                                 download_connections=min(configured.download.connections,
+                                                          configured.download.provider_max_connections),
+                                 downloader=downloader)
         poller = JobPoller(job_service, configured.provider_concurrency)
         app.state.settings = configured
         app.state.settings_service = settings_service
