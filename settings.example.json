@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "database": {
-    "url": "sqlite+aiosqlite:///config/downloadarr.db"
+    "url": "sqlite+aiosqlite:////config/downloadarr.db"
   },
   "download": {
     "path": "/downloads",

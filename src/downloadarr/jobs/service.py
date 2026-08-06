@@ -157,17 +157,14 @@ class JobService:
             job.provider_job.remote_id = match.remote_id
             job.state = JobState.PROVIDER_DOWNLOADING.value
             job.next_poll_at = _now() + timedelta(seconds=self.poll_interval)
-        elif match:
-            job.state = JobState.PROVIDER_QUEUED.value
-            job.next_poll_at = _now() + timedelta(seconds=self.queued_poll_interval)
         else:
             torrent = await self.provider.find_torrent(job.info_hash)
-            if torrent is None:
+            if torrent is not None:
+                job.provider_job.remote_id = torrent.remote_id
+                self._apply_torrent(job, torrent)
+            else:
                 job.state = JobState.PROVIDER_QUEUED.value
                 job.next_poll_at = _now() + timedelta(seconds=self.queued_poll_interval)
-                return
-            job.provider_job.remote_id = torrent.remote_id
-            self._apply_torrent(job, torrent)
 
     async def _poll_remote(self, job: Job) -> None:
         torrent = await self.provider.get_torrent(job.provider_job.remote_id)

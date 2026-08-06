@@ -66,6 +66,10 @@ The live 2026-08-06 validation confirmed:
 
 No media job was submitted as part of the connection handshake.
 
+The subsequent Debian live stress test is recorded in
+`docs/live-stress-test.md`. It confirmed persistent delivery and scoped cleanup
+and exposed several edge cases that were fixed before normal Arr usage.
+
 ## Secrets and backups
 
 `SettingsService` stores real secrets in the protected local JSON file and its

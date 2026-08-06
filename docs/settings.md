@@ -40,7 +40,7 @@ Backing up `/config` preserves both settings and the SQLite database.
 {
   "schema_version": 1,
   "database": {
-    "url": "sqlite+aiosqlite:///config/downloadarr.db"
+    "url": "sqlite+aiosqlite:////config/downloadarr.db"
   },
   "download": {
     "path": "/downloads",
@@ -84,6 +84,9 @@ than silently interpreted using the wrong semantics.
 | `url` | string | SQLAlchemy async database URL |
 
 SQLite is the supported database for the initial release.
+The four slashes in the container example make `/config/downloadarr.db` an
+absolute path; three slashes would resolve `config/downloadarr.db` relative to
+the image working directory and bypass the mounted `/config` directory.
 
 ### Download
 

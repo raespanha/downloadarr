@@ -89,6 +89,24 @@ async def test_file_discovery_and_signed_download_request(torbox_server):
         await provider.close()
 
 
+async def test_rejected_duplicate_magnet_reconciles_existing_torrent(torbox_server):
+    async def handler(request):
+        if request.path.endswith("/createtorrent"):
+            return web.json_response({"success": False, "error": "DIFF_ISSUE"}, status=400)
+        assert request.path.endswith("/mylist")
+        return web.json_response({"success": True, "data": [{
+            "id": 42, "hash": HASH, "name": "Release", "size": 99,
+            "progress": 1, "download_state": "cached", "download_finished": True,
+            "download_present": True,
+        }]})
+    provider = TorBoxProvider("secret", await torbox_server(handler))
+    try:
+        submission = await provider.create_magnet(f"magnet:?xt=urn:btih:{HASH}")
+        assert submission.remote_id == 42 and submission.queued_id is None
+    finally:
+        await provider.close()
+
+
 @pytest.mark.parametrize("status,transient", [(401, False), (403, False), (422, False),
                                                 (429, True), (502, True)])
 async def test_torbox_error_classification(torbox_server, status, transient):

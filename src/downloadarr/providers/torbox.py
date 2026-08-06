@@ -5,6 +5,7 @@ from typing import Any
 
 import aiohttp
 
+from ..magnets import MagnetError, parse_magnet
 from .base import (ProviderError, ProviderFile, ProviderQueuedTorrent, ProviderSubmission,
                    ProviderTorrent)
 
@@ -30,7 +31,24 @@ class TorBoxProvider:
         form.add_field("allow_zip", "false")
         form.add_field("as_queued", "true")
         form.add_field("add_only_if_cached", "false")
-        data = await self._request("POST", "/torrents/createtorrent", data=form)
+        try:
+            data = await self._request("POST", "/torrents/createtorrent", data=form)
+        except ProviderError as error:
+            if error.code != "REQUEST_REJECTED":
+                raise
+            try:
+                info_hash = parse_magnet(magnet).info_hash
+            except MagnetError:
+                raise error
+            existing = await self.find_torrent(info_hash)
+            if existing is not None:
+                return ProviderSubmission(remote_id=existing.remote_id)
+            queued = next((item for item in await self.get_queued()
+                           if item.info_hash == info_hash), None)
+            if queued is not None:
+                return ProviderSubmission(remote_id=queued.remote_id,
+                                          queued_id=queued.queued_id)
+            raise error
         if isinstance(data, int):
             return ProviderSubmission(remote_id=data)
         if not isinstance(data, dict):

@@ -339,6 +339,23 @@ async def test_disappeared_queue_entry_reconciles_with_torrent_list(tmp_path):
         assert recovered.provider_job.remote_id == 42
 
 
+async def test_stale_queue_entry_prefers_ready_torrent_with_same_hash(tmp_path):
+    provider = FakeProvider()
+    async def queued_create(magnet):
+        return ProviderSubmission(queued_id=7)
+    provider.create_magnet = queued_create
+    provider.queued = [ProviderQueuedTorrent(7, HASH, None)]
+    async with client_for(tmp_path, provider) as (client, app, provider):
+        await login(client)
+        await client.post("/api/v2/torrents/add", data={"urls": MAGNET})
+        job = (await app.state.job_service.jobs())[0]
+        await app.state.job_service.process(job.id)
+        await app.state.job_service.process(job.id)
+        recovered = await app.state.job_service.job(HASH)
+        assert recovered.state == JobState.PROVIDER_DOWNLOADING.value
+        assert recovered.provider_job.remote_id == 42
+
+
 async def test_transient_and_terminal_provider_failures(tmp_path):
     provider = FakeProvider()
     async def transient(magnet):

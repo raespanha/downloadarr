@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
 class DatabaseSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    url: str = "sqlite+aiosqlite:///config/downloadarr.db"
+    url: str = "sqlite+aiosqlite:////config/downloadarr.db"
 
 
 class DownloadSettings(BaseModel):
