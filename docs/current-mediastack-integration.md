@@ -128,5 +128,10 @@ Downloadarr still needs these deployment-facing pieces:
 - controlled cancellation before active-job deletion is enabled; and
 - a Sonarr/Radarr compatibility test against the running versions.
 
-The first connection test should use the existing Debian fixture or another
-legal release. Do not use an active library download as the migration test.
+The deployment prerequisites and native Arr handshake were completed on
+2026-08-06. Both Sonarr and Radarr successfully connected to Downloadarr at
+`rdt-client:6500`; no media job was submitted during that handshake.
+
+The first end-to-end import test should use the existing Debian fixture or
+another legal release. Do not use an active library download as the migration
+test.

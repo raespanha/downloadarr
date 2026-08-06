@@ -35,6 +35,8 @@ def create_app(settings: Settings | None = None, provider: TorrentProvider | Non
                                  download_connections=min(configured.download.connections,
                                                           configured.download.provider_max_connections),
                                  downloader=downloader)
+        for name, path in configured.download.categories.items():
+            await job_service.ensure_category(name, path)
         poller = JobPoller(job_service, configured.provider_concurrency)
         app.state.settings = configured
         app.state.settings_service = settings_service
@@ -54,6 +56,11 @@ def create_app(settings: Settings | None = None, provider: TorrentProvider | Non
             await database.close()
 
     app = FastAPI(title="Downloadarr", version="0.1.0", lifespan=lifespan)
+
+    @app.get("/healthz", include_in_schema=False)
+    async def health() -> dict[str, str]:
+        return {"status": "ok"}
+
     app.include_router(router)
     return app
 

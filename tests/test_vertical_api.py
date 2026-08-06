@@ -106,6 +106,36 @@ async def test_auth_versions_preferences_and_logout(tmp_path):
         assert (await client.get("/api/v2/app/preferences")).status_code == 403
 
 
+async def test_health_handshake_and_transfer_info(tmp_path):
+    async with client_for(tmp_path) as (client, app, provider):
+        assert (await client.get("/healthz")).json() == {"status": "ok"}
+        await login(client)
+        build = (await client.get("/api/v2/app/buildInfo")).json()
+        assert build["bitness"] == "64"
+        assert (await client.get("/api/v2/app/defaultSavePath")).text.endswith("downloads")
+        transfer = (await client.get("/api/v2/transfer/info")).json()
+        assert transfer["connection_status"] == "connected"
+
+
+async def test_configured_categories_are_bootstrapped_and_updated(tmp_path):
+    values = settings(tmp_path).model_dump()
+    values["download"]["categories"] = {"tv-sonarr": tmp_path / "first"}
+    configured = Settings.model_validate(values)
+    app = create_app(configured, FakeProvider(), start_poller=False,
+                     downloader=FakeDownloader())
+    async with app.router.lifespan_context(app):
+        categories = await app.state.job_service.categories()
+        assert categories[0].name == "tv-sonarr"
+        assert categories[0].save_path.endswith("first")
+    values["download"]["categories"] = {"tv-sonarr": tmp_path / "changed"}
+    configured = Settings.model_validate(values)
+    app = create_app(configured, FakeProvider(), start_poller=False,
+                     downloader=FakeDownloader())
+    async with app.router.lifespan_context(app):
+        categories = await app.state.job_service.categories()
+        assert categories[0].save_path.endswith("changed")
+
+
 async def test_category_add_is_persisted_before_provider(tmp_path):
     async with client_for(tmp_path) as (client, app, provider):
         await login(client)
@@ -364,12 +394,27 @@ async def test_settings_service_saves_atomically_and_creates_backup(tmp_path):
     original = settings(tmp_path)
     await service.save(original)
     assert load_settings(path).username == "user"
+    assert load_settings(path).password.get_secret_value() == "pass"
+    assert load_settings(path).torbox_api_token.get_secret_value() == "test"
     values = original.model_dump()
     values["qbittorrent"]["username"] = "changed"
     await service.save(Settings.model_validate(values))
     assert load_settings(path).username == "changed"
     assert len(list(path.parent.glob("settings.*.bak.json"))) == 1
     assert not list(path.parent.glob("*.tmp"))
+
+
+async def test_settings_service_preserves_container_paths(tmp_path):
+    path = tmp_path / "settings.json"
+    values = settings(tmp_path).model_dump()
+    values["download"]["path"] = "/torbox"
+    values["download"]["categories"] = {"radarr": "/torbox/radarr"}
+    await SettingsService(path).save(Settings.model_validate(values))
+    raw = path.read_text(encoding="utf-8")
+    assert '"path": "/torbox"' in raw
+    assert '"radarr": "/torbox/radarr"' in raw
+    restored = load_settings(path)
+    assert restored.download.path == "/torbox"
 
 
 def test_settings_service_reports_environment_managed_fields(tmp_path, monkeypatch):

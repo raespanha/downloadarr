@@ -17,9 +17,18 @@ class DatabaseSettings(BaseModel):
 
 class DownloadSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    path: Path = Path("/downloads")
+    path: str = "/downloads"
     connections: int = 8
     provider_max_connections: int = 4
+    categories: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("path", mode="before")
+    @classmethod
+    def path_string(cls, value: Any) -> str:
+        value = str(value)
+        if not value:
+            raise ValueError("download path is required")
+        return value
 
     @field_validator("connections", "provider_max_connections")
     @classmethod
@@ -27,6 +36,21 @@ class DownloadSettings(BaseModel):
         if not 1 <= value <= 256:
             raise ValueError("connections must be between 1 and 256")
         return value
+
+    @field_validator("categories")
+    @classmethod
+    def valid_categories(cls, value: dict[str, str]) -> dict[str, str]:
+        for name, path in value.items():
+            if not name or len(name) > 255 or not str(path):
+                raise ValueError("download categories require a valid name and path")
+        return value
+
+    @field_validator("categories", mode="before")
+    @classmethod
+    def category_strings(cls, value: Any) -> dict[str, str]:
+        if not isinstance(value, dict):
+            raise ValueError("download categories must be an object")
+        return {str(name): str(path) for name, path in value.items()}
 
 
 class QBittorrentSettings(BaseModel):
@@ -99,7 +123,7 @@ class Settings(BaseModel):
 
     @property
     def download_path(self) -> Path:
-        return self.download.path
+        return Path(self.download.path)
 
     @property
     def username(self) -> str:
@@ -146,6 +170,15 @@ class Settings(BaseModel):
         data["qbittorrent"]["password"] = "********"
         data["qbittorrent"]["api_key"] = "********" if self.api_key else None
         data["torbox"]["api_token"] = "********" if self.torbox_api_token.get_secret_value() else ""
+        return data
+
+    def storage_dict(self) -> dict[str, Any]:
+        """Serialize validated settings with secrets for protected local storage."""
+        data = self.model_dump(mode="json")
+        data["qbittorrent"]["password"] = self.password.get_secret_value()
+        data["qbittorrent"]["api_key"] = (self.api_key.get_secret_value()
+                                                if self.api_key else None)
+        data["torbox"]["api_token"] = self.torbox_api_token.get_secret_value()
         return data
 
 
@@ -216,7 +249,7 @@ class SettingsService:
         temporary = Path(name)
         try:
             with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
-                json.dump(settings.model_dump(mode="json"), handle, indent=2)
+                json.dump(settings.storage_dict(), handle, indent=2)
                 handle.write("\n")
                 handle.flush()
                 os.fsync(handle.fileno())

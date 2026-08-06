@@ -45,7 +45,11 @@ Backing up `/config` preserves both settings and the SQLite database.
   "download": {
     "path": "/downloads",
     "connections": 8,
-    "provider_max_connections": 4
+    "provider_max_connections": 4,
+    "categories": {
+      "tv-sonarr": "/downloads/tv-sonarr",
+      "radarr": "/downloads/radarr"
+    }
   },
   "qbittorrent": {
     "username": "downloadarr",
@@ -88,6 +92,7 @@ SQLite is the supported database for the initial release.
 | `path` | path | Local/container-visible completed download root |
 | `connections` | integer | Between 1 and 256 |
 | `provider_max_connections` | integer | Provider-specific connection ceiling; TorBox recommends 4 |
+| `categories` | object | Category names mapped to container-visible save paths |
 
 ### qBittorrent facade
 

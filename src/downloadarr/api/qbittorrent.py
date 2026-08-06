@@ -58,6 +58,27 @@ async def preferences(request: Request) -> dict:
             "max_seeding_time_enabled": False, "max_seeding_time": -1}
 
 
+@router.get("/api/v2/app/buildInfo", dependencies=[Depends(require_auth)])
+async def build_info() -> dict[str, str]:
+    return {"qt": "6.7.2", "libtorrent": "2.0.10.0", "boost": "1.85.0",
+            "openssl": "3.3.1", "bitness": "64"}
+
+
+@router.get("/api/v2/app/defaultSavePath", dependencies=[Depends(require_auth)])
+async def default_save_path(request: Request) -> PlainTextResponse:
+    return PlainTextResponse(request.app.state.settings.download_path.as_posix())
+
+
+@router.get("/api/v2/transfer/info", dependencies=[Depends(require_auth)])
+async def transfer_info(job_service: JobService = Depends(service)) -> dict:
+    jobs = await job_service.jobs()
+    speed = sum(job.download_speed for job in jobs if job.state == JobState.DELIVERING.value)
+    downloaded = sum(min(job.size or 0, int((job.size or 0) * job.progress)) for job in jobs)
+    return {"connection_status": "connected", "dl_info_speed": speed,
+            "dl_info_data": downloaded, "up_info_speed": 0, "up_info_data": 0,
+            "dl_rate_limit": 0, "up_rate_limit": 0, "dht_nodes": 0}
+
+
 @router.get("/api/v2/torrents/categories", dependencies=[Depends(require_auth)])
 async def categories(job_service: JobService = Depends(service)) -> dict:
     values = await job_service.categories()

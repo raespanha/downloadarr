@@ -60,6 +60,19 @@ class JobService:
             await session.commit()
             return category
 
+    async def ensure_category(self, name: str, save_path: str) -> Category:
+        if not name or len(name) > 255 or not save_path:
+            raise ValueError("invalid category")
+        async with self.database.session() as session:
+            category = await session.scalar(select(Category).where(Category.name == name))
+            if category is None:
+                category = Category(name=name, save_path=save_path)
+                session.add(category)
+            elif category.save_path != save_path:
+                category.save_path = save_path
+            await session.commit()
+            return category
+
     async def categories(self) -> list[Category]:
         async with self.database.session() as session:
             return list((await session.scalars(select(Category).order_by(Category.name))).all())

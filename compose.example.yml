@@ -1,0 +1,14 @@
+services:
+  downloadarr:
+    build:
+      context: .
+    image: downloadarr:local
+    container_name: downloadarr
+    ports:
+      - "6500:6500"
+    volumes:
+      - ./config:/config
+      - ${DOWNLOADARR_MEDIA_PATH:-./data}:/torbox
+    init: true
+    stop_grace_period: 30s
+    restart: unless-stopped

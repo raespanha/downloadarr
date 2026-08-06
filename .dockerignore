@@ -1,0 +1,15 @@
+.git
+.gitignore
+.pytest_cache
+__pycache__
+*.py[cod]
+*.mkv
+*.mp4
+*.iso
+*.downloadarr.json
+*.downloadarr.part
+config
+downloads
+tests
+app
+docs
