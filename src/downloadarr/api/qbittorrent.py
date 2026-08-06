@@ -42,13 +42,13 @@ async def logout(request: Request) -> Response:
 
 
 @router.get("/api/v2/app/webapiVersion")
-async def webapi_version() -> PlainTextResponse:
-    return PlainTextResponse("2.8.1")
+async def webapi_version(request: Request) -> PlainTextResponse:
+    return PlainTextResponse(request.app.state.settings.qbittorrent.webapi_version)
 
 
 @router.get("/api/v2/app/version", dependencies=[Depends(require_auth)])
-async def app_version() -> PlainTextResponse:
-    return PlainTextResponse("v4.3.9")
+async def app_version(request: Request) -> PlainTextResponse:
+    return PlainTextResponse(request.app.state.settings.qbittorrent.application_version)
 
 
 @router.get("/api/v2/app/preferences", dependencies=[Depends(require_auth)])

@@ -5,6 +5,7 @@ Last reviewed: 2026-08-06
 Implementation tasks:
 
 - [Vertical Slice 01: Magnet Submission and Observable TorBox Queue](tomorrow-vertical-01-magnet-queue.md)
+- [Settings schema, persistence, and future UI contract](settings.md)
 
 ## Purpose
 

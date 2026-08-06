@@ -9,7 +9,7 @@ from downloadarr.api import create_app
 from downloadarr.db.models import JobState
 from downloadarr.providers.base import (ProviderQueuedTorrent, ProviderSubmission,
                                         ProviderError, ProviderTorrent)
-from downloadarr.settings import Settings, load_settings
+from downloadarr.settings import Settings, SettingsService, load_settings
 
 HASH = "0123456789abcdef0123456789abcdef01234567"
 MAGNET = f"magnet:?xt=urn:btih:{HASH}&dn=Test.Release"
@@ -39,10 +39,13 @@ class FakeProvider:
 
 
 def settings(tmp_path: Path) -> Settings:
-    return Settings(database_url=f"sqlite+aiosqlite:///{tmp_path / 'jobs.db'}",
-                    download_path=tmp_path / "downloads", username="user", password="pass",
-                    torbox_api_token="test", poll_interval=0.01,
-                    queued_poll_interval=0.01)
+    return Settings.model_validate({
+        "database": {"url": f"sqlite+aiosqlite:///{tmp_path / 'jobs.db'}"},
+        "download": {"path": tmp_path / "downloads"},
+        "qbittorrent": {"username": "user", "password": "pass"},
+        "torbox": {"api_token": "test"},
+        "scheduler": {"poll_interval": 0.01, "queued_poll_interval": 0.01},
+    })
 
 
 @asynccontextmanager
@@ -146,7 +149,9 @@ async def test_schema_migration_is_idempotent(tmp_path):
 
 
 async def test_bearer_authentication(tmp_path):
-    configured = settings(tmp_path).model_copy(update={"api_key": SecretStr("bearer-secret")})
+    values = settings(tmp_path).model_dump()
+    values["qbittorrent"]["api_key"] = "bearer-secret"
+    configured = Settings.model_validate(values)
     app = create_app(configured, FakeProvider(), start_poller=False)
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
@@ -193,10 +198,15 @@ async def test_transient_and_terminal_provider_failures(tmp_path):
 
 
 def test_settings_redact_secrets(tmp_path):
-    configured = settings(tmp_path).model_copy(update={"torbox_api_token": SecretStr("top-secret"),
-                                                        "api_key": SecretStr("api-secret")})
+    values = settings(tmp_path).model_dump()
+    values["torbox"]["api_token"] = "top-secret"
+    values["qbittorrent"]["api_key"] = "api-secret"
+    configured = Settings.model_validate(values)
     rendered = repr(configured)
     assert "top-secret" not in rendered and "api-secret" not in rendered
+    masked = configured.masked()
+    assert masked["torbox"]["api_token"] == "********"
+    assert masked["qbittorrent"]["password"] == "********"
 
 
 def test_json_settings_with_environment_override(tmp_path, monkeypatch):
@@ -215,3 +225,24 @@ def test_invalid_json_settings_are_rejected(tmp_path):
     path.write_text("not-json", encoding="utf-8")
     with pytest.raises(ValueError, match="invalid Downloadarr settings file"):
         load_settings(path)
+
+
+async def test_settings_service_saves_atomically_and_creates_backup(tmp_path):
+    path = tmp_path / "config" / "settings.json"
+    service = SettingsService(path)
+    original = settings(tmp_path)
+    await service.save(original)
+    assert load_settings(path).username == "user"
+    values = original.model_dump()
+    values["qbittorrent"]["username"] = "changed"
+    await service.save(Settings.model_validate(values))
+    assert load_settings(path).username == "changed"
+    assert len(list(path.parent.glob("settings.*.bak.json"))) == 1
+    assert not list(path.parent.glob("*.tmp"))
+
+
+def test_settings_service_reports_environment_managed_fields(tmp_path, monkeypatch):
+    monkeypatch.setenv("TORBOX_API_TOKEN", "managed")
+    monkeypatch.setenv("DOWNLOADARR_DOWNLOAD_PATH", "/managed")
+    managed = SettingsService(tmp_path / "settings.json").managed_fields()
+    assert managed == ["download.path", "torbox.api_token"]

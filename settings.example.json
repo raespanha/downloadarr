@@ -1,14 +1,28 @@
 {
-  "database_url": "sqlite+aiosqlite:///config/downloadarr.db",
-  "download_path": "/downloads",
-  "username": "downloadarr",
-  "password": "replace-with-a-strong-password",
-  "api_key": null,
-  "torbox_api_token": "replace-with-your-torbox-token",
-  "torbox_api_base": "https://api.torbox.app/v1/api",
-  "torbox_request_timeout": 30,
-  "provider_concurrency": 4,
-  "poll_interval": 5,
-  "queued_poll_interval": 30,
-  "max_poll_backoff": 300
+  "schema_version": 1,
+  "database": {
+    "url": "sqlite+aiosqlite:///config/downloadarr.db"
+  },
+  "download": {
+    "path": "/downloads",
+    "connections": 8
+  },
+  "qbittorrent": {
+    "username": "downloadarr",
+    "password": "replace-with-a-strong-password",
+    "api_key": null,
+    "webapi_version": "2.8.1",
+    "application_version": "v4.3.9"
+  },
+  "torbox": {
+    "api_token": "replace-with-your-torbox-token",
+    "api_base": "https://api.torbox.app/v1/api",
+    "request_timeout": 30
+  },
+  "scheduler": {
+    "provider_concurrency": 4,
+    "poll_interval": 5,
+    "queued_poll_interval": 30,
+    "max_poll_backoff": 300
+  }
 }

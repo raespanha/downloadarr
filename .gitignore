@@ -2,6 +2,7 @@
 venv/
 .env
 config/settings.json
+config/settings.*.bak.json
 config/*.db
 config/*.db-*
 __pycache__/
