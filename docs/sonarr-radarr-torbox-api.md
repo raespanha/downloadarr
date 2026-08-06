@@ -306,9 +306,9 @@ Authenticated API calls use the TorBox API token.
 |---|---|---|
 | POST | `/torrents/createtorrent` | Add a magnet or torrent file |
 | GET | `/torrents/mylist?id=<id>` | Poll one torrent |
-| GET | `/torrents/getqueued` | Reconcile queued submissions |
+| GET | `/queued/getqueued` | Reconcile queued submissions |
 | POST | `/torrents/controltorrent` | Pause, resume, reannounce, or delete |
-| POST | `/torrents/controlqueued` | Remove a queued submission |
+| POST | `/queued/controlqueued` | Remove a queued submission |
 | GET | `/torrents/requestdl` | Obtain a signed file URL |
 | GET/POST | `/torrents/checkcached` | Optional cache preflight |
 

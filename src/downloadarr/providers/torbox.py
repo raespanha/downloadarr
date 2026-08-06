@@ -51,26 +51,26 @@ class TorBoxProvider:
             data = data[0] if data else None
         if not isinstance(data, dict):
             raise ProviderError("NOT_FOUND", "TorBox torrent was not found", transient=True)
-        progress = float(data.get("progress") or 0)
-        if progress > 1:
-            progress /= 100
-        return ProviderTorrent(
-            remote_id=_integer(data.get("id", remote_id), "id"),
-            info_hash=str(data.get("hash") or "").lower(),
-            name=str(data.get("name") or "Unnamed torrent")[:512],
-            state=str(data.get("download_state") or "unknown")[:64],
-            size=max(0, _integer(data.get("size", 0), "size")),
-            progress=min(max(progress, 0.0), 1.0),
-            download_speed=max(0, _integer(data.get("download_speed", 0), "download_speed")),
-            eta=_optional_integer(data.get("eta"), "eta"),
-            download_finished=bool(data.get("download_finished")),
-            download_present=bool(data.get("download_present")),
-        )
+        return _torrent(data, remote_id)
+
+    async def find_torrent(self, info_hash: str) -> ProviderTorrent | None:
+        data = await self._request("GET", "/torrents/mylist",
+                                   params={"bypass_cache": "true", "limit": 1000})
+        if isinstance(data, dict):
+            data = [data]
+        if not isinstance(data, list):
+            raise ProviderError("INVALID_RESPONSE", "TorBox torrent list is invalid", transient=True)
+        match = next((item for item in data if isinstance(item, dict)
+                      and str(item.get("hash") or "").lower() == info_hash.lower()), None)
+        return _torrent(match) if match is not None else None
 
     async def get_queued(self) -> list[ProviderQueuedTorrent]:
-        data = await self._request("GET", "/torrents/getqueued")
+        data = await self._request("GET", "/queued/getqueued",
+                                   params={"type": "torrent", "bypass_cache": "true", "limit": 1000})
         if data is None:
             return []
+        if isinstance(data, dict):
+            data = [data]
         if not isinstance(data, list):
             raise ProviderError("INVALID_RESPONSE", "TorBox queued list is invalid", transient=True)
         result = []
@@ -122,6 +122,24 @@ class TorBoxProvider:
             message = f"TorBox operation failed ({code[:64]})"
             raise ProviderError(code[:64], message, transient=code in {"DATABASE_ERROR", "UNKNOWN_ERROR"})
         return envelope.get("data")
+
+
+def _torrent(data: dict, fallback_id: int | None = None) -> ProviderTorrent:
+        progress = float(data.get("progress") or 0)
+        if progress > 1:
+            progress /= 100
+        return ProviderTorrent(
+            remote_id=_integer(data.get("id", fallback_id), "id"),
+            info_hash=str(data.get("hash") or "").lower(),
+            name=str(data.get("name") or "Unnamed torrent")[:512],
+            state=str(data.get("download_state") or "unknown")[:64],
+            size=max(0, _integer(data.get("size", 0), "size")),
+            progress=min(max(progress, 0.0), 1.0),
+            download_speed=max(0, _integer(data.get("download_speed", 0), "download_speed")),
+            eta=_optional_integer(data.get("eta"), "eta"),
+            download_finished=bool(data.get("download_finished")),
+            download_present=bool(data.get("download_present")),
+        )
 
 
 def _integer(value: Any, field: str) -> int:

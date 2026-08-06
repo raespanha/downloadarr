@@ -42,7 +42,25 @@ async def test_create_and_poll_torbox(torbox_server):
         assert (await provider.create_magnet(f"magnet:?xt=urn:btih:{HASH}")).remote_id == 42
         torrent = await provider.get_torrent(42)
         assert torrent.progress == 0.5 and torrent.info_hash == HASH
+        assert (await provider.find_torrent(HASH)).remote_id == 42
         assert all(row[2] == "Bearer secret" for row in seen)
+    finally:
+        await provider.close()
+
+
+async def test_current_queued_endpoint_and_parameters(torbox_server):
+    async def handler(request):
+        assert request.path == "/v1/api/queued/getqueued"
+        assert request.query["type"] == "torrent"
+        assert request.query["bypass_cache"] == "true"
+        return web.json_response({"success": True, "data": {
+            "id": 7, "hash": HASH, "torrent_id": 42,
+        }})
+    provider = TorBoxProvider("secret", await torbox_server(handler))
+    try:
+        queued = await provider.get_queued()
+        assert queued[0].queued_id == 7
+        assert queued[0].remote_id == 42
     finally:
         await provider.close()
 

@@ -252,7 +252,7 @@ class TorrentProvider(Protocol):
    - `as_queued=true`;
    - `add_only_if_cached=false`.
 2. `GET /v1/api/torrents/mylist?id=<remote_id>&bypass_cache=true`.
-3. `GET /v1/api/torrents/getqueued` for submissions that return only a queued
+3. `GET /v1/api/queued/getqueued` for submissions that return only a queued
    identifier.
 
 Set `Authorization: Bearer <token>` where required. Use one shared
