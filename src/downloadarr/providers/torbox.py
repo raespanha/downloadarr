@@ -28,6 +28,21 @@ class TorBoxProvider:
     async def create_magnet(self, magnet: str) -> ProviderSubmission:
         form = aiohttp.FormData()
         form.add_field("magnet", magnet)
+        try:
+            info_hash = parse_magnet(magnet).info_hash
+        except MagnetError:
+            info_hash = None
+        return await self._create_torrent(form, info_hash)
+
+    async def create_torrent(self, payload: bytes, filename: str,
+                             info_hash: str) -> ProviderSubmission:
+        form = aiohttp.FormData()
+        form.add_field("file", payload, filename=filename,
+                       content_type="application/x-bittorrent")
+        return await self._create_torrent(form, info_hash)
+
+    async def _create_torrent(self, form: aiohttp.FormData,
+                              info_hash: str | None) -> ProviderSubmission:
         form.add_field("allow_zip", "false")
         form.add_field("as_queued", "true")
         form.add_field("add_only_if_cached", "false")
@@ -36,9 +51,7 @@ class TorBoxProvider:
         except ProviderError as error:
             if error.code != "REQUEST_REJECTED":
                 raise
-            try:
-                info_hash = parse_magnet(magnet).info_hash
-            except MagnetError:
+            if info_hash is None:
                 raise error
             existing = await self.find_torrent(info_hash)
             if existing is not None:

@@ -48,6 +48,26 @@ async def test_create_and_poll_torbox(torbox_server):
         await provider.close()
 
 
+async def test_create_binary_torrent(torbox_server):
+    payload = b"d4:infod6:pieces20:abcdefghijklmnopqrstee"
+
+    async def handler(request):
+        assert request.path.endswith("/createtorrent")
+        form = await request.post()
+        upload = form["file"]
+        assert upload.filename == "release.torrent"
+        assert upload.file.read() == payload
+        assert form["allow_zip"] == "false"
+        return web.json_response({"success": True, "data": {"torrent_id": 42}})
+
+    provider = TorBoxProvider("secret", await torbox_server(handler))
+    try:
+        result = await provider.create_torrent(payload, "release.torrent", HASH)
+        assert result.remote_id == 42
+    finally:
+        await provider.close()
+
+
 async def test_current_queued_endpoint_and_parameters(torbox_server):
     async def handler(request):
         assert request.path == "/v1/api/queued/getqueued"

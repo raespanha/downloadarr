@@ -24,6 +24,13 @@ force dynamic segmented delivery up to the provider ceiling.
 
 ## qBittorrent facade
 
+Sonarr and Radarr may submit either one magnet URI or one multipart `.torrent`
+file. Downloadarr validates the torrent's bencoded structure, calculates its
+v1 info hash from the original `info` dictionary bytes, and stores the upload
+in SQLite before the poller submits it to TorBox. Version 1 and hybrid torrents
+are supported; pure BitTorrent v2 torrents are rejected until the facade can
+represent their 64-character hashes correctly.
+
 While local delivery is active, `/api/v2/torrents/info` returns `downloading`.
 After local publication it returns `stalledUP`, a completion timestamp, and the
 exact `content_path`. `/api/v2/torrents/files` reports persisted per-file names,

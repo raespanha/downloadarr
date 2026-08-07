@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import hashlib
 from pathlib import Path
 
 import httpx
@@ -14,11 +15,16 @@ from downloadarr.state import DownloadResult
 
 HASH = "0123456789abcdef0123456789abcdef01234567"
 MAGNET = f"magnet:?xt=urn:btih:{HASH}&dn=Test.Release"
+TORRENT_INFO = (b"d6:lengthi5e4:name12:Test.Release12:piece lengthi16384e"
+                b"6:pieces20:abcdefghijklmnopqrste")
+TORRENT = b"d4:info" + TORRENT_INFO + b"e"
+TORRENT_HASH = hashlib.sha1(TORRENT_INFO).hexdigest()
 
 
 class FakeProvider:
     def __init__(self):
         self.creates = []
+        self.torrent_creates = []
         self.torrent = ProviderTorrent(42, HASH, "Test.Release", "downloading", 1000,
                                        0.4, 100, 6, False, True)
         self.queued = []
@@ -28,6 +34,10 @@ class FakeProvider:
 
     async def create_magnet(self, magnet):
         self.creates.append(magnet)
+        return ProviderSubmission(remote_id=42)
+
+    async def create_torrent(self, payload, filename, info_hash):
+        self.torrent_creates.append((payload, filename, info_hash))
         return ProviderSubmission(remote_id=42)
 
     async def get_torrent(self, remote_id):
@@ -159,6 +169,35 @@ async def test_duplicate_submission_is_idempotent(tmp_path):
         assert len((await client.get("/api/v2/torrents/info")).json()) == 1
 
 
+async def test_binary_torrent_upload_is_persisted_and_submitted(tmp_path):
+    async with client_for(tmp_path) as (client, app, provider):
+        await login(client)
+        response = await client.post("/api/v2/torrents/add", files={
+            "torrents": ("release.torrent", TORRENT, "application/x-bittorrent"),
+        })
+        assert response.status_code == 200 and response.text == "Ok."
+        job = await app.state.job_service.job(TORRENT_HASH)
+        assert job.source_kind == "torrent"
+        assert job.source_uri == "release.torrent"
+        assert job.source_data == TORRENT
+        assert provider.torrent_creates == []
+        await app.state.job_service.process(job.id)
+        assert provider.torrent_creates == [(TORRENT, "release.torrent", TORRENT_HASH)]
+
+
+async def test_binary_torrent_submission_survives_restart(tmp_path):
+    async with client_for(tmp_path) as (client, app, provider):
+        await login(client)
+        await client.post("/api/v2/torrents/add", files={
+            "torrents": ("release.torrent", TORRENT, "application/x-bittorrent"),
+        })
+    second = FakeProvider()
+    async with client_for(tmp_path, second) as (client, app, provider):
+        job = await app.state.job_service.job(TORRENT_HASH)
+        await app.state.job_service.process(job.id)
+        assert second.torrent_creates == [(TORRENT, "release.torrent", TORRENT_HASH)]
+
+
 async def test_provider_transitions_never_report_local_completion(tmp_path):
     async with client_for(tmp_path) as (client, app, provider):
         await login(client)
@@ -270,6 +309,33 @@ async def test_properties_and_filters(tmp_path):
         assert (await client.get(f"/api/v2/torrents/properties?hash={'f' * 40}" )).status_code == 404
         assert len((await client.get(f"/api/v2/torrents/info?hashes={HASH}")).json()) == 1
         assert (await client.get("/api/v2/torrents/info?category=radarr")).json() == []
+
+
+async def test_arr_post_add_controls_are_accepted_without_moving_payload(tmp_path):
+    async with client_for(tmp_path) as (client, app, provider):
+        await login(client)
+        await client.post("/api/v2/torrents/createCategory",
+                          data={"category": "sonarr", "savePath": "/torbox/tv-sonarr"})
+        await client.post("/api/v2/torrents/add", data={"urls": MAGNET, "category": "sonarr"})
+        controls = [
+            ("setCategory", {"hashes": HASH, "category": "sonarr-imported"}),
+            ("topPrio", {"hashes": HASH}),
+            ("setForceStart", {"hashes": HASH, "value": "true"}),
+            ("setShareLimits", {"hashes": HASH, "ratioLimit": "0", "seedingTimeLimit": "0"}),
+        ]
+        for endpoint, data in controls:
+            response = await client.post(f"/api/v2/torrents/{endpoint}", data=data)
+            assert response.status_code == 200
+        job = await app.state.job_service.job(HASH)
+        assert job.category.name == "sonarr"
+
+
+async def test_arr_post_add_controls_require_hashes(tmp_path):
+    async with client_for(tmp_path) as (client, app, provider):
+        await login(client)
+        for endpoint in ("setCategory", "topPrio", "setForceStart", "setShareLimits"):
+            response = await client.post(f"/api/v2/torrents/{endpoint}", data={})
+            assert response.status_code == 400
 
 
 async def test_restart_recovers_submitted_job(tmp_path):

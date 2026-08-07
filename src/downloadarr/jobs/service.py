@@ -12,6 +12,7 @@ from ..db.models import Category, DeliveryFile, Job, JobState, ProviderJob
 from ..downloader import Downloader
 from ..errors import DownloadError
 from ..magnets import MagnetInfo
+from ..torrents import TorrentInfo
 from ..providers.base import ProviderError, TorrentProvider
 
 
@@ -29,8 +30,17 @@ class JobService:
             connections=download_connections, transfer_mode=download_transfer_mode))
 
     async def add_magnet(self, magnet: MagnetInfo, category_name: str | None) -> Job:
+        return await self._add_source(magnet.info_hash, magnet.display_name, category_name,
+                                      "magnet", magnet.uri, None)
+
+    async def add_torrent(self, torrent: TorrentInfo, category_name: str | None) -> Job:
+        return await self._add_source(torrent.info_hash, torrent.display_name, category_name,
+                                      "torrent", torrent.filename, torrent.payload)
+
+    async def _add_source(self, info_hash: str, name: str | None, category_name: str | None,
+                          source_kind: str, source_uri: str, source_data: bytes | None) -> Job:
         async with self.database.session() as session:
-            existing = await session.scalar(select(Job).where(Job.info_hash == magnet.info_hash))
+            existing = await session.scalar(select(Job).where(Job.info_hash == info_hash))
             if existing:
                 return existing
             category = None
@@ -38,8 +48,8 @@ class JobService:
                 category = await session.scalar(select(Category).where(Category.name == category_name))
                 if category is None:
                     raise ValueError("category does not exist")
-            job = Job(info_hash=magnet.info_hash, name=magnet.display_name,
-                      source_uri=magnet.uri, category=category,
+            job = Job(info_hash=info_hash, name=name, source_uri=source_uri,
+                      source_kind=source_kind, source_data=source_data, category=category,
                       state=JobState.SUBMITTED.value, next_poll_at=_now())
             job.provider_job = ProviderJob(provider="torbox")
             session.add(job)
@@ -47,7 +57,7 @@ class JobService:
                 await session.commit()
             except IntegrityError:
                 await session.rollback()
-                return await session.scalar(select(Job).where(Job.info_hash == magnet.info_hash))
+                return await session.scalar(select(Job).where(Job.info_hash == info_hash))
             return job
 
     async def create_category(self, name: str, save_path: str) -> Category:
@@ -144,7 +154,13 @@ class JobService:
             await session.commit()
 
     async def _submit(self, job: Job) -> None:
-        submission = await self.provider.create_magnet(job.source_uri)
+        if job.source_kind == "torrent":
+            if not job.source_data:
+                raise ValueError("persisted torrent source is missing")
+            submission = await self.provider.create_torrent(
+                job.source_data, job.source_uri, job.info_hash)
+        else:
+            submission = await self.provider.create_magnet(job.source_uri)
         job.provider_job.remote_id = submission.remote_id
         job.provider_job.queued_id = submission.queued_id
         job.state = (JobState.PROVIDER_QUEUED.value if submission.remote_id is None

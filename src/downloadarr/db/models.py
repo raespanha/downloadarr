@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import LargeBinary, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -41,6 +41,8 @@ class Job(Base):
     name: Mapped[str | None] = mapped_column(Text)
     category_id: Mapped[str | None] = mapped_column(ForeignKey("categories.id"))
     source_uri: Mapped[str] = mapped_column(Text, nullable=False)
+    source_kind: Mapped[str] = mapped_column(String(16), nullable=False, default="magnet")
+    source_data: Mapped[bytes | None] = mapped_column(LargeBinary)
     state: Mapped[str] = mapped_column(String(32), default=JobState.SUBMITTED.value, index=True)
     size: Mapped[int | None] = mapped_column(Integer)
     progress: Mapped[float] = mapped_column(Float, default=0.0)

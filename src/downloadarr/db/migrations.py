@@ -56,5 +56,9 @@ CREATE TABLE delivery_files (
     UNIQUE (job_id, provider_file_id)
 );
 CREATE INDEX ix_delivery_files_job_id ON delivery_files(job_id);
+""",
+    3: """
+ALTER TABLE jobs ADD COLUMN source_kind VARCHAR(16) NOT NULL DEFAULT 'magnet';
+ALTER TABLE jobs ADD COLUMN source_data BLOB;
 """
 }

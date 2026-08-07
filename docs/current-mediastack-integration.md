@@ -1,8 +1,8 @@
 # Current MediaStack Integration Audit
 
-Audit date: 2026-08-06. This document records the current Docker Desktop stack
-before Downloadarr replaces RDT Client. No containers or application settings
-were changed during the audit.
+Audit date: 2026-08-06; deployment status updated 2026-08-07. This document
+records the Docker Desktop stack and the compatibility checks used while
+Downloadarr replaced the TorBox RDT Client service.
 
 ## Docker topology
 
@@ -14,7 +14,7 @@ Relevant services:
 
 | Service | Address used by Arr | Host port | State during audit |
 |---|---|---:|---|
-| `rdt-client` | `rdt-client:6500` | 6500 | Stopped |
+| `rdt-client` | `rdt-client:6500` | 6500 | Downloadarr, running and healthy |
 | `rdt-client-rd` | `rdt-client-rd:6500` | 6501 | Not running |
 | `sonarr` | `sonarr:8989` | 8989 | Running |
 | `radarr` | `radarr:7878` | 7878 | Running |
@@ -91,9 +91,11 @@ The current Radarr root folder is `/movies/`, backed by
 
 Radarr has a Remote Path Mapping from `C:\torbox_media\` to
 `/torbox_movies/`. `/torbox_movies` is not mounted in the Radarr container, so
-this mapping is inconsistent with the current Compose mounts. Downloadarr will
-report `/torbox/...` paths and Radarr already sees that path directly. Remove
-this stale mapping only when performing the controlled connection switch.
+this mapping is inconsistent with the current Compose mounts. Downloadarr
+reports `/torbox/...` paths and Radarr already sees that path directly. The
+mapping does not match Downloadarr's reported remote prefix, so it is not
+currently applied. Remove it later as configuration cleanup rather than making
+it part of the first import test.
 
 ## Lowest-risk Downloadarr migration
 
@@ -117,21 +119,30 @@ Keeping the DNS name `rdt-client` avoids simultaneous edits to both Arr
 applications. The old named volume remains detached and recoverable for
 rollback.
 
-## Preconditions before switching
+## Current integration status
 
-Downloadarr still needs these deployment-facing pieces:
+The production image, health check, ignored JSON settings, category bootstrap,
+and qBittorrent handshake are deployed. Magnet submissions and multipart
+`.torrent` uploads are persisted before TorBox submission, including enough
+source data to recover after a process restart. Downloadarr accepts the
+optional priority, force-start, share-limit, and post-import category calls
+made by Arr. These controls are compatibility no-ops because TorBox does not
+seed or expose a qBittorrent-style queue; the original category remains fixed
+so the reported path cannot diverge from the physical delivery path.
 
-- a production Dockerfile and health check;
-- Compose configuration without committing the TorBox token;
-- category bootstrap or category management through the API/UI;
-- qBittorrent handshake endpoints still missing from the current facade;
-- controlled cancellation before active-job deletion is enabled; and
-- a Sonarr/Radarr compatibility test against the running versions.
+On 2026-08-07 the live Sonarr and Radarr `testall` calls both completed with no
+failures against Downloadarr at `rdt-client:6500`. Database migration 3 was
+applied and the service remained healthy. No torrent or media job was
+submitted during those checks.
 
-The deployment prerequisites and native Arr handshake were completed on
-2026-08-06. Both Sonarr and Radarr successfully connected to Downloadarr at
-`rdt-client:6500`; no media job was submitted during that handshake.
+Remaining before calling the vertical complete:
 
-The first end-to-end import test should use the existing Debian fixture or
-another legal release. Do not use an active library download as the migration
-test.
+- perform one controlled legal download and completed-import test in Sonarr or
+  Radarr;
+- verify Arr removes the completed Downloadarr job while preserving or moving
+  the imported library file as configured; and
+- add structured cancellation before allowing active-job deletion.
+
+The first end-to-end import test should use a small, explicitly approved legal
+media fixture that Arr can identify. The Debian fixture remains useful for raw
+TorBox/download stress testing, but cannot prove Sonarr or Radarr importing.

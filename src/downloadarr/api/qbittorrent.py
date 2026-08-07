@@ -4,10 +4,12 @@ from pathlib import PurePosixPath
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, PlainTextResponse
+from starlette.datastructures import UploadFile
 
 from ..db.models import Job, JobState
 from ..jobs.service import JobService
 from ..magnets import MagnetError, parse_magnet
+from ..torrents import MAX_TORRENT_BYTES, TorrentError, parse_torrent
 from .auth import require_auth
 
 router = APIRouter()
@@ -101,17 +103,20 @@ async def create_category(request: Request, job_service: JobService = Depends(se
 async def add_torrent(request: Request, job_service: JobService = Depends(service)) -> Response:
     form = await request.form()
     source = form.get("urls")
-    if source is None or not isinstance(source, str):
+    uploads = [value for value in form.getlist("torrents") if isinstance(value, UploadFile)]
+    sources = source.strip().splitlines() if isinstance(source, str) and source.strip() else []
+    if len(sources) + len(uploads) != 1:
         return PlainTextResponse("Fails.", status_code=400)
-    # This vertical supports exactly one magnet. Binary torrent uploads follow next.
-    sources = source.strip().splitlines()
-    if len(sources) != 1:
-        return PlainTextResponse("Fails.", status_code=400)
-    source = sources[0]
+    category = str(form.get("category")) if form.get("category") else None
     try:
-        magnet = parse_magnet(source)
-        await job_service.add_magnet(magnet, str(form.get("category")) if form.get("category") else None)
-    except (MagnetError, ValueError):
+        if uploads:
+            upload = uploads[0]
+            payload = await upload.read(MAX_TORRENT_BYTES + 1)
+            torrent = parse_torrent(payload, upload.filename)
+            await job_service.add_torrent(torrent, category)
+        else:
+            await job_service.add_magnet(parse_magnet(sources[0]), category)
+    except (MagnetError, TorrentError, ValueError):
         return PlainTextResponse("Fails.", status_code=400)
     return PlainTextResponse("Ok.")
 
@@ -197,5 +202,43 @@ async def delete_torrents(request: Request,
     try:
         await job_service.remove(hashes, delete_files)
     except ValueError:
+        return PlainTextResponse("Fails.", status_code=400)
+    return Response(status_code=200)
+
+
+@router.post("/api/v2/torrents/setCategory", dependencies=[Depends(require_auth)])
+async def set_category(request: Request) -> Response:
+    """Accept Arr's optional post-import category transition.
+
+    Downloadarr deliberately keeps the original category because it determines
+    the immutable delivery path. Moving a completed payload is outside this
+    endpoint's scope, and changing only the reported category would make
+    ``content_path`` incorrect.
+    """
+    form = await request.form()
+    if not str(form.get("hashes", "")) or form.get("category") is None:
+        return PlainTextResponse("Fails.", status_code=400)
+    return Response(status_code=200)
+
+
+@router.post("/api/v2/torrents/topPrio", dependencies=[Depends(require_auth)])
+async def top_priority(request: Request) -> Response:
+    return await _accepted_torrent_control(request)
+
+
+@router.post("/api/v2/torrents/setForceStart", dependencies=[Depends(require_auth)])
+async def set_force_start(request: Request) -> Response:
+    return await _accepted_torrent_control(request)
+
+
+@router.post("/api/v2/torrents/setShareLimits", dependencies=[Depends(require_auth)])
+async def set_share_limits(request: Request) -> Response:
+    # Debrid-backed jobs do not seed, so qBittorrent share limits have no effect.
+    return await _accepted_torrent_control(request)
+
+
+async def _accepted_torrent_control(request: Request) -> Response:
+    form = await request.form()
+    if not str(form.get("hashes", "")):
         return PlainTextResponse("Fails.", status_code=400)
     return Response(status_code=200)
