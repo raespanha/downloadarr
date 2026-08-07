@@ -153,6 +153,16 @@ class TorBoxProvider:
                                 transient=True)
         return data
 
+    async def delete_torrent(self, remote_id: int) -> None:
+        await self._request("POST", "/torrents/controltorrent", json={
+            "torrent_id": remote_id, "operation": "delete", "all": False,
+        })
+
+    async def delete_queued(self, queued_id: int) -> None:
+        await self._request("POST", "/queued/controlqueued", json={
+            "queued_id": queued_id, "operation": "delete", "all": False,
+        })
+
     async def _request(self, method: str, path: str, **kwargs) -> Any:
         try:
             async with self._session.request(method, self._base + path, **kwargs) as response:

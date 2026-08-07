@@ -135,13 +135,16 @@ failures against Downloadarr at `rdt-client:6500`. Database migration 3 was
 applied and the service remained healthy. No torrent or media job was
 submitted during those checks.
 
-Remaining before calling the vertical complete:
+The first live Sonarr vertical completed on 2026-08-07: Downloadarr delivered
+the cached 8.23 GB payload, Sonarr tracked local progress, and Sonarr imported
+the episode into `/series`. The import required a full copy because `/torbox`
+and `/series` are separate host mounts; on native Linux, placing staging and
+library paths on one filesystem allows hardlinks and avoids that copy delay.
 
-- perform one controlled legal download and completed-import test in Sonarr or
-  Radarr;
-- verify Arr removes the completed Downloadarr job while preserving or moving
-  the imported library file as configured; and
-- add structured cancellation before allowing active-job deletion.
+Structured active-job cancellation and TorBox torrent/queue deletion were
+implemented after the test exposed the missing cleanup behavior. The remaining
+live verification is completed-job removal after Arr import and the equivalent
+Radarr movie flow.
 
 The first end-to-end import test should use a small, explicitly approved legal
 media fixture that Arr can identify. The Debian fixture remains useful for raw

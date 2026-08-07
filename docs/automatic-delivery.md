@@ -36,11 +36,16 @@ After local publication it returns `stalledUP`, a completion timestamp, and the
 exact `content_path`. `/api/v2/torrents/files` reports persisted per-file names,
 sizes, and progress.
 
-`POST /api/v2/torrents/delete` removes the local job. With
-`deleteFiles=false`, published data is preserved. With `deleteFiles=true`, only
-validated file targets beneath the job's configured download root are removed.
-Deletion is currently limited to completed or failed jobs; cancellation of an
-active transfer will be added with explicit task ownership in a later slice.
+`POST /api/v2/torrents/delete` first marks each job as being removed, cancels
+and awaits any active local transfer, and then deletes the exact TorBox torrent
+or queued submission. With `deleteFiles=false`, local published and resumable
+data is preserved. With `deleteFiles=true`, only validated final, partial, and
+manifest targets beneath the job's configured download root are removed. A
+failed provider cleanup preserves the SQLite job and resumable local state.
+
+Completed jobs report `pausedUP`, allowing Arr applications to recognize a
+stopped, import-ready item and apply their configured completed-download
+cleanup behavior.
 
 ## Restart behavior
 

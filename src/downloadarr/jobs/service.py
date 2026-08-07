@@ -1,3 +1,4 @@
+import asyncio
 import json
 import time
 from datetime import datetime, timedelta, timezone
@@ -26,6 +27,9 @@ class JobService:
         self.poll_interval, self.queued_poll_interval = poll_interval, queued_poll_interval
         self.max_backoff = max_backoff
         self.download_path = Path(download_path)
+        self._active_tasks: dict[str, asyncio.Task] = {}
+        self._removing: set[str] = set()
+        self._task_lock = asyncio.Lock()
         self.downloader = downloader or Downloader(DownloadConfig(
             connections=download_connections, transfer_mode=download_transfer_mode))
 
@@ -111,6 +115,21 @@ class JobService:
             return list((await session.scalars(statement)).all())
 
     async def process(self, job_id: str) -> None:
+        task = asyncio.current_task()
+        if task is None:
+            return
+        async with self._task_lock:
+            if job_id in self._removing or job_id in self._active_tasks:
+                return
+            self._active_tasks[job_id] = task
+        try:
+            await self._process(job_id)
+        finally:
+            async with self._task_lock:
+                if self._active_tasks.get(job_id) is task:
+                    self._active_tasks.pop(job_id, None)
+
+    async def _process(self, job_id: str) -> None:
         async with self.database.session() as session:
             job = await session.get(Job, job_id)
             if job is None or job.state in (JobState.COMPLETED.value, JobState.FAILED.value):
@@ -258,19 +277,45 @@ class JobService:
     async def remove(self, hashes: list[str], delete_files: bool) -> None:
         normalized = [value.lower() for value in hashes]
         async with self.database.session() as session:
-            jobs = list((await session.scalars(
-                select(Job).where(Job.info_hash.in_(normalized)))).unique().all())
-            for job in jobs:
-                if job.state not in (JobState.COMPLETED.value, JobState.FAILED.value):
-                    raise ValueError("active jobs cannot be removed yet")
-                if delete_files:
-                    base = Path(job.category.save_path) if job.category else self.download_path
-                    for item in job.delivery_files:
-                        destination = _safe_destination(base, item.relative_path)
-                        destination.unlink(missing_ok=True)
-                        _remove_empty_parents(destination.parent, base.resolve())
-                await session.delete(job)
-            await session.commit()
+            jobs = list((await session.scalars(select(Job).where(
+                Job.info_hash.in_(normalized)))).unique().all())
+            job_ids = [job.id for job in jobs]
+        await self._stop_processing(job_ids)
+        try:
+            async with self.database.session() as session:
+                jobs = list((await session.scalars(select(Job).where(
+                    Job.id.in_(job_ids)))).unique().all())
+                for job in jobs:
+                    if job.provider_job.remote_id is not None:
+                        await self.provider.delete_torrent(job.provider_job.remote_id)
+                    elif job.provider_job.queued_id is not None:
+                        await self.provider.delete_queued(job.provider_job.queued_id)
+                    if delete_files:
+                        base = Path(job.category.save_path) if job.category else self.download_path
+                        for item in job.delivery_files:
+                            destination = _safe_destination(base, item.relative_path)
+                            destination.unlink(missing_ok=True)
+                            destination.with_name(
+                                destination.name + ".downloadarr.part").unlink(missing_ok=True)
+                            destination.with_name(
+                                destination.name + ".downloadarr.json").unlink(missing_ok=True)
+                            _remove_empty_parents(destination.parent, base.resolve())
+                    await session.delete(job)
+                await session.commit()
+        finally:
+            async with self._task_lock:
+                self._removing.difference_update(job_ids)
+
+    async def _stop_processing(self, job_ids: list[str]) -> None:
+        current = asyncio.current_task()
+        async with self._task_lock:
+            self._removing.update(job_ids)
+            tasks = [self._active_tasks[job_id] for job_id in job_ids
+                     if job_id in self._active_tasks and self._active_tasks[job_id] is not current]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def _now() -> datetime:

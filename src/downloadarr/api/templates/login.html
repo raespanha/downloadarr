@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in · Downloadarr</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, system-ui, sans-serif; background:#0b1016; color:#eef3f8; }
+    body { min-height:100vh; margin:0; display:grid; place-items:center; background:radial-gradient(circle at top,#172434,#0b1016 55%); }
+    main { width:min(390px,calc(100% - 40px)); padding:32px; border:1px solid #283646; border-radius:16px; background:#121a23; box-shadow:0 20px 60px #0008; }
+    h1 { margin:0 0 8px; font-size:28px; } p { color:#91a2b5; margin:0 0 24px; }
+    label { display:block; margin:16px 0 6px; font-size:13px; color:#b8c6d4; }
+    input { box-sizing:border-box; width:100%; padding:12px; border-radius:8px; border:1px solid #34465a; background:#0c131b; color:#fff; }
+    button { width:100%; margin-top:22px; padding:12px; border:0; border-radius:8px; background:#36d399; color:#062319; font-weight:800; cursor:pointer; }
+    .error { color:#ff8795; margin-bottom:12px; }
+  </style>
+</head>
+<body><main>
+  <h1>Downloadarr</h1><p>Sign in with the qBittorrent-compatible account.</p>
+  {% if error %}<div class="error">Invalid username or password.</div>{% endif %}
+  <form method="post" action="/ui/login">
+    <label for="username">Username</label><input id="username" name="username" autocomplete="username" required autofocus>
+    <label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required>
+    <button type="submit">Sign in</button>
+  </form>
+</main></body></html>

@@ -9,6 +9,7 @@ from starlette.datastructures import UploadFile
 from ..db.models import Job, JobState
 from ..jobs.service import JobService
 from ..magnets import MagnetError, parse_magnet
+from ..providers.base import ProviderError
 from ..torrents import MAX_TORRENT_BYTES, TorrentError, parse_torrent
 from .auth import require_auth
 
@@ -166,7 +167,7 @@ def _torrent_json(job: Job, default_save_path: str) -> dict:
         JobState.RETRY_WAIT.value: "stalledDL",
         JobState.PROVIDER_READY.value: "queuedDL",
         JobState.DELIVERING.value: "downloading",
-        JobState.COMPLETED.value: "stalledUP",
+        JobState.COMPLETED.value: "pausedUP",
         JobState.FAILED.value: "error",
     }
     if len(job.delivery_files) == 1:
@@ -201,7 +202,7 @@ async def delete_torrents(request: Request,
     delete_files = str(form.get("deleteFiles", "false")).lower() == "true"
     try:
         await job_service.remove(hashes, delete_files)
-    except ValueError:
+    except (ProviderError, ValueError):
         return PlainTextResponse("Fails.", status_code=400)
     return Response(status_code=200)
 

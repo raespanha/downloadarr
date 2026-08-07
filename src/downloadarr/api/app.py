@@ -10,13 +10,15 @@ from ..providers.base import TorrentProvider
 from ..providers.torbox import TorBoxProvider
 from ..settings import Settings, SettingsService, load_settings
 from .auth import SessionStore
+from .dashboard import router as dashboard_router
 from .qbittorrent import router
 
 
 def create_app(settings: Settings | None = None, provider: TorrentProvider | None = None,
-               *, start_poller: bool = True, downloader: Downloader | None = None) -> FastAPI:
+               *, start_poller: bool = True, downloader: Downloader | None = None,
+               settings_service: SettingsService | None = None) -> FastAPI:
     configured = settings or load_settings()
-    settings_service = SettingsService()
+    actual_settings_service = settings_service or SettingsService()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -40,7 +42,7 @@ def create_app(settings: Settings | None = None, provider: TorrentProvider | Non
             await job_service.ensure_category(name, path)
         poller = JobPoller(job_service, configured.provider_concurrency)
         app.state.settings = configured
-        app.state.settings_service = settings_service
+        app.state.settings_service = actual_settings_service
         app.state.database = database
         app.state.provider = actual_provider
         app.state.job_service = job_service
@@ -63,6 +65,7 @@ def create_app(settings: Settings | None = None, provider: TorrentProvider | Non
         return {"status": "ok"}
 
     app.include_router(router)
+    app.include_router(dashboard_router)
     return app
 
 

@@ -108,7 +108,11 @@ class FileInfo:
 3. downloading sem seeders no provider → `"stalledDL"`
 4. caso contrário → `"downloading"`
 
-**Fórmula de progresso:** `(progresso_provider + progresso_download_local) / 2.0`
+**Progresso reportado:** representa os bytes já presentes no filesystem local.
+Enquanto o item está apenas na fila/cache do provider, o progresso permanece em
+0%. Quando começa a entrega HTTP local, progride de 0% a 100%. Esta semântica é
+compatível com qBittorrent/RDT-Client e evita afirmar ao Sonarr que existem
+localmente bytes que ainda estão apenas no provider.
 
 ## Estratégia de otimização de velocidade (o core do projeto)
 

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from contextlib import suppress
 
 from .service import JobService
 
@@ -20,7 +21,9 @@ class JobPoller:
     async def stop(self) -> None:
         self._stop.set()
         if self._task:
-            await self._task
+            self._task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._task
             self._task = None
 
     async def run(self) -> None:

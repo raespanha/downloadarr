@@ -109,6 +109,27 @@ async def test_file_discovery_and_signed_download_request(torbox_server):
         await provider.close()
 
 
+async def test_remote_torrent_and_queue_deletion(torbox_server):
+    seen = []
+
+    async def handler(request):
+        seen.append((request.path, await request.json()))
+        return web.json_response({"success": True, "data": {}})
+
+    provider = TorBoxProvider("secret", await torbox_server(handler))
+    try:
+        await provider.delete_torrent(42)
+        await provider.delete_queued(7)
+        assert seen == [
+            ("/v1/api/torrents/controltorrent",
+             {"torrent_id": 42, "operation": "delete", "all": False}),
+            ("/v1/api/queued/controlqueued",
+             {"queued_id": 7, "operation": "delete", "all": False}),
+        ]
+    finally:
+        await provider.close()
+
+
 async def test_rejected_duplicate_magnet_reconciles_existing_torrent(torbox_server):
     async def handler(request):
         if request.path.endswith("/createtorrent"):

@@ -1,4 +1,4 @@
-# Before Making the Repository Public
+# Warning — Before Making the Repository Public
 
 > **Warning:** Do not make this repository public until every item below has
 > been checked. Local diagnostic logs and development conversations may have

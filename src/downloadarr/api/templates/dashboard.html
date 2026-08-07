@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Downloadarr</title>
+  <style>
+    :root { color-scheme:dark; font-family:Inter,system-ui,sans-serif; background:#0b1016; color:#ecf2f8; }
+    * { box-sizing:border-box } body { margin:0; background:#0b1016; }
+    header { position:sticky; top:0; z-index:2; display:flex; align-items:center; justify-content:space-between; padding:18px max(24px,4vw); border-bottom:1px solid #263443; background:#0f161fef; backdrop-filter:blur(12px); }
+    h1 { margin:0; font-size:24px; letter-spacing:-.5px } .accent { color:#36d399 }
+    main { max-width:1400px; margin:auto; padding:28px max(20px,4vw) 60px; }
+    .toolbar { display:flex; gap:10px; align-items:center } button,.button { border:0; border-radius:8px; padding:9px 13px; background:#253545; color:#eef5fb; font-weight:700; cursor:pointer; text-decoration:none; }
+    button.danger { background:#46262d; color:#ff9ca8 } button.primary { background:#36d399; color:#062319 }
+    .notice { padding:12px 15px; margin-bottom:18px; border-radius:9px; background:#143a31; color:#8ef0cc } .notice.error { background:#40232b; color:#ff9ca8 }
+    .summary { display:grid; grid-template-columns:repeat(4,minmax(120px,1fr)); gap:12px; margin-bottom:20px; }
+    .metric,.card { border:1px solid #263443; border-radius:12px; background:#111923; }
+    .metric { padding:16px } .metric span { display:block; color:#8497aa; font-size:12px; text-transform:uppercase; letter-spacing:.08em } .metric strong { display:block; margin-top:5px; font-size:22px; }
+    .jobs { display:grid; gap:12px } .card { padding:18px; }
+    .job-head { display:flex; justify-content:space-between; gap:16px; align-items:flex-start } .job-title { margin:0; font-size:17px; overflow-wrap:anywhere }
+    .meta { display:flex; flex-wrap:wrap; gap:8px 16px; color:#91a2b5; font-size:13px; margin-top:8px }
+    .badge { padding:4px 8px; border-radius:99px; background:#233142; color:#b9c8d6; font-size:12px; white-space:nowrap } .badge.completed { background:#153a30;color:#7ee4bf } .badge.failed { background:#46262d;color:#ff9ca8 }
+    .progress { height:9px; margin:16px 0 8px; overflow:hidden; border-radius:99px; background:#273442 } .progress div { height:100%; background:linear-gradient(90deg,#24b9ff,#36d399); transition:width .4s }
+    .job-foot { display:flex; justify-content:space-between; gap:12px; align-items:center; color:#a4b3c1; font-size:13px } .job-actions form { display:inline }
+    details { margin-top:28px; border:1px solid #263443; border-radius:12px; background:#111923; } summary { cursor:pointer; padding:17px; font-weight:800 } .settings { padding:0 18px 20px; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+    label { display:block; color:#aebdca; font-size:13px } input,select,textarea { width:100%; margin-top:6px; padding:10px; border:1px solid #34465a; border-radius:8px; background:#0b121a; color:#fff } textarea { min-height:120px; font-family:ui-monospace,monospace } .wide { grid-column:1/-1 }
+    .empty { padding:40px; text-align:center; color:#8193a5; border:1px dashed #304153; border-radius:12px }
+    @media(max-width:700px){body{overflow-x:hidden}header{gap:10px;padding:16px 20px}header h1{font-size:21px}.toolbar #updated{display:none}.summary{grid-template-columns:repeat(2,minmax(0,1fr))}.settings{grid-template-columns:1fr}.wide{grid-column:auto}.job-head,.job-foot{flex-direction:column}.card{min-width:0}.job-actions{align-self:flex-end}}
+  </style>
+</head>
+<body>
+<header><h1>Download<span class="accent">arr</span></h1><div class="toolbar"><span id="updated"></span><form method="post" action="/ui/logout"><button>Sign out</button></form></div></header>
+<main>
+  {% if saved %}<div class="notice">Settings saved atomically. Restart Downloadarr to apply them.</div>{% endif %}
+  {% if error %}<div class="notice error">The requested operation failed. Check the values and service logs.</div>{% endif %}
+  <section class="summary">
+    <div class="metric"><span>Jobs</span><strong id="job-count">0</strong></div>
+    <div class="metric"><span>Active</span><strong id="active-count">0</strong></div>
+    <div class="metric"><span>Speed</span><strong id="total-speed">0 B/s</strong></div>
+    <div class="metric"><span>Completed</span><strong id="completed-count">0</strong></div>
+  </section>
+  <section id="jobs" class="jobs"><div class="empty">Loading downloads…</div></section>
+  <details>
+    <summary>Settings</summary>
+    <form class="settings" method="post" action="/ui/settings">
+      <label>TorBox token<input name="torbox_token" type="password" value="" placeholder="{% if settings.torbox.api_token %}Configured — leave blank to keep{% else %}Not configured{% endif %}" autocomplete="new-password"></label>
+      <label>Transfer mode<select name="transfer_mode"><option value="auto" {% if settings.download.transfer_mode == 'auto' %}selected{% endif %}>Auto</option><option value="parallel" {% if settings.download.transfer_mode == 'parallel' %}selected{% endif %}>Parallel</option><option value="sequential" {% if settings.download.transfer_mode == 'sequential' %}selected{% endif %}>Sequential</option></select></label>
+      <label>Connections<input name="connections" type="number" min="1" max="256" value="{{ settings.download.connections }}" required></label>
+      <label>Provider connection ceiling<input name="provider_max_connections" type="number" min="1" max="256" value="{{ settings.download.provider_max_connections }}" required></label>
+      <label class="wide">Default download path<input name="download_path" value="{{ settings.download.path }}" required></label>
+      <label class="wide">Categories (JSON)<textarea name="categories" spellcheck="false" required>{{ categories_json }}</textarea></label>
+      <div class="wide"><button class="primary" type="submit">Save settings</button> <small>Environment-managed fields: {{ managed_fields|join(', ') or 'none' }}</small></div>
+    </form>
+  </details>
+</main>
+<script>
+const jobsNode=document.querySelector('#jobs');
+const fmtBytes=n=>{if(!n)return '0 B';const u=['B','KB','MB','GB','TB'];const i=Math.min(Math.floor(Math.log(n)/Math.log(1024)),u.length-1);return `${(n/1024**i).toFixed(i?1:0)} ${u[i]}`};
+const fmtEta=n=>n==null?'—':n<=0?'Done':`${Math.floor(n/3600)}:${String(Math.floor(n%3600/60)).padStart(2,'0')}:${String(n%60).padStart(2,'0')}`;
+function render(values){
+  const active=values.filter(v=>!['completed','failed'].includes(v.state));
+  document.querySelector('#job-count').textContent=values.length;document.querySelector('#active-count').textContent=active.length;
+  document.querySelector('#completed-count').textContent=values.filter(v=>v.state==='completed').length;
+  document.querySelector('#total-speed').textContent=fmtBytes(values.reduce((a,v)=>a+v.speed,0))+'/s';
+  jobsNode.replaceChildren();
+  if(!values.length){jobsNode.innerHTML='<div class="empty">No downloads yet.</div>';return}
+  for(const job of values){
+    const card=document.createElement('article');card.className='card';
+    const pct=(job.progress*100).toFixed(1);
+    card.innerHTML=`<div class="job-head"><div><h2 class="job-title"></h2><div class="meta"><span class="category"></span><span>${fmtBytes(job.size)}</span><span>${job.hash.slice(0,8)}</span></div></div><span class="badge ${job.state}"></span></div><div class="progress"><div style="width:${pct}%"></div></div><div class="job-foot"><span class="status-line"></span><span class="job-actions"><form method="post" action="/ui/jobs/${job.hash}/remove" onsubmit="return confirm('Remove this job from Downloadarr and TorBox?')"><input type="hidden" name="deleteFiles" value="false"><button class="danger">Remove</button></form></span></div>`;
+    card.querySelector('.job-title').textContent=job.name;card.querySelector('.category').textContent=job.category||'Uncategorized';card.querySelector('.badge').textContent=job.phase;card.querySelector('.status-line').textContent=`${pct}% · ${fmtBytes(job.speed)}/s · ETA ${fmtEta(job.eta)}${job.error?' · '+job.error:''}`;jobsNode.append(card);
+  }
+  document.querySelector('#updated').textContent='Updated '+new Date().toLocaleTimeString();
+}
+async function refresh(){try{const response=await fetch('/ui/api/jobs');if(response.status===403){location='/ui/login';return}render(await response.json())}catch(e){document.querySelector('#updated').textContent='Connection lost'}}
+refresh();setInterval(refresh,2000);
+</script>
+</body></html>
