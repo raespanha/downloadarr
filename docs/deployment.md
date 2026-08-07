@@ -31,6 +31,7 @@ The corresponding settings use container paths:
     "path": "/torbox",
     "connections": 8,
     "provider_max_connections": 4,
+    "transfer_mode": "auto",
     "categories": {
       "tv-sonarr": "/torbox/tv-sonarr",
       "radarr": "/torbox/radarr"
@@ -41,6 +42,12 @@ The corresponding settings use container paths:
 
 Paths are stored as strings so a settings file written on Windows preserves
 Linux container paths exactly.
+
+`auto` uses a normal full GET for a fresh transfer and validated ranges after
+an interruption. Set `transfer_mode` to `parallel` for an explicit segmented
+transfer. The measured local Docker Desktop deployment uses `parallel` because
+four dynamic ranges outperform its constrained single HTTP stream; native
+Windows testing is faster with `auto`.
 
 ## Existing MediaStack migration
 

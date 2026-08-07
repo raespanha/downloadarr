@@ -77,3 +77,19 @@ The future UI speed test should call the same delivery service and add explicit
 confirmation, cancellation, 1-4 connection comparison, live throughput,
 official hash verification, and optional automatic cleanup. Results should be
 clearly separated from normal Sonarr/Radarr jobs.
+
+## 2026-08-07 browser-class performance vertical
+
+A fresh same-URL disk comparison measured native Windows curl at 42.67 MB/s
+and Downloadarr `auto` mode at 40.69 MB/s. Both transferred exactly 791674880
+bytes and matched the fixture SHA-256. Downloadarr reached 95.35% of the native
+disk baseline.
+
+Docker Desktop was independently limited to approximately 18.2 MB/s with both
+raw aiohttp and Linux curl. Downloadarr measured 17.70 MB/s on container-local
+storage and 17.48 MB/s through the Windows bind mount, ruling out the writer
+and bind mount as the primary cause. Four dynamically scheduled ranges raised
+the container result to 20.63 MB/s with no retries and a matching hash.
+
+All temporary benchmark outputs were removed after verification. Signed URLs
+and credentials were not stored.

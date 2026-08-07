@@ -19,12 +19,14 @@ class JobService:
     def __init__(self, database: Database, provider: TorrentProvider, *,
                  poll_interval: float = 5.0, queued_poll_interval: float = 30.0,
                  max_backoff: float = 300.0, download_path: Path = Path("/downloads"),
-                 download_connections: int = 4, downloader: Downloader | None = None) -> None:
+                 download_connections: int = 4, download_transfer_mode: str = "auto",
+                 downloader: Downloader | None = None) -> None:
         self.database, self.provider = database, provider
         self.poll_interval, self.queued_poll_interval = poll_interval, queued_poll_interval
         self.max_backoff = max_backoff
         self.download_path = Path(download_path)
-        self.downloader = downloader or Downloader(DownloadConfig(connections=download_connections))
+        self.downloader = downloader or Downloader(DownloadConfig(
+            connections=download_connections, transfer_mode=download_transfer_mode))
 
     async def add_magnet(self, magnet: MagnetInfo, category_name: str | None) -> Job:
         async with self.database.session() as session:
@@ -217,7 +219,7 @@ class JobService:
                 nonlocal last_checkpoint
                 item.downloaded = min(value.downloaded_bytes, item.size)
                 job.progress = ((prior + item.downloaded) / total if total else 1.0)
-                speed = value.downloaded_bytes / value.elapsed if value.elapsed else 0
+                speed = value.session_downloaded_bytes / value.elapsed if value.elapsed else 0
                 job.download_speed = int(speed)
                 remaining = max(total - prior - item.downloaded, 0)
                 job.eta = int(remaining / speed) if speed else None

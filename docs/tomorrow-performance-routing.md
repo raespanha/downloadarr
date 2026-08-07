@@ -1,8 +1,47 @@
 # Tomorrow Task: Restore Browser-Class Delivery Speed
 
 Planned for: 2026-08-07  
-Status: Ready to start  
+Status: Implemented and verified
 Target: One focused performance vertical
+
+## Implementation result
+
+Completed on 2026-08-07 with:
+
+- accurate current-session byte and speed accounting for resumed transfers;
+- credential-safe CDN hostname, range, and retry diagnostics;
+- a CLI URL-from-environment option and JSON diagnostics mode;
+- browser-style full `200` GETs for fresh `auto` transfers;
+- explicit `sequential` and `parallel` transfer modes;
+- dynamic parallel segmentation with eight segments per worker;
+- capability-selected Linux `os.pwrite` and independent-handle fallback
+  positional writes;
+- structured background checkpoints that snapshot durable progress without
+  holding the network write path during manifest publication; and
+- 62 passing tests on host Python 3.13 and container Python 3.12.
+
+The same fresh legal fixture URL and destination produced:
+
+| Environment and client | Mode | Result |
+|---|---|---:|
+| Windows native curl to disk | Full GET | 42.67 MB/s |
+| Windows Downloadarr | `auto` full GET | 40.69 MB/s |
+| Docker Desktop raw aiohttp | Full GET to null sink | 18.17 MB/s |
+| Docker Desktop Linux curl | Full GET to null sink | 18.16 MB/s |
+| Docker Desktop Downloadarr, internal `/tmp` | `auto` full GET | 17.70 MB/s |
+| Docker Desktop Downloadarr, Windows bind mount | `auto` full GET | 17.48 MB/s |
+| Docker Desktop Downloadarr, internal `/tmp` | 4-worker `parallel` | 20.63 MB/s |
+
+Every complete Downloadarr result matched the expected size and SHA-256. The
+Windows native result reached 95.35% of the native disk baseline and exceeded
+the 90% acceptance threshold. Container host networking did not improve the
+bounded sample. Matching raw aiohttp and Linux curl results, plus equivalent
+`/tmp` and bind-mount results, isolate the remaining container gap to Docker
+Desktop's Linux network path rather than Downloadarr or its writer.
+
+The local Windows Docker deployment therefore explicitly uses `parallel`
+with the four-connection TorBox ceiling. `auto` remains the portable default
+and selects the measured browser-style full GET for fresh downloads.
 
 ## Objective
 
@@ -10,7 +49,7 @@ Make Downloadarr approach the throughput of a browser downloading the same
 TorBox object, without weakening byte validation, resumability, cancellation,
 or atomic publication.
 
-This task is successful when a fresh Downloadarr transfer reaches at least
+This task was successful when a fresh Downloadarr transfer reached at least
 90% of the native single-stream baseline for the same signed URL and produces
 the expected SHA-256 digest.
 
@@ -197,9 +236,9 @@ use permit it; otherwise label single samples clearly.
   downloader benchmark API that the future UI can call.
 - Sonarr/Radarr path mapping or import behavior unrelated to delivery speed.
 
-## Tomorrow starting point
+## Follow-up starting point
 
-Begin with transfer accounting tests and the benchmark instrumentation. Then
-capture a native disk baseline for the legal fixture before changing the
-writer. Optimize one layer at a time and rerun the same matrix after each
-change so routing variation is not mistaken for a local improvement.
+Build the future UI benchmark on the credential-safe result fields. If Windows
+Docker Desktop must match host-native speed, evaluate a host-side delivery
+worker or future Docker Desktop/WSL networking changes separately; replacing
+aiohttp with Linux curl does not address the measured environment ceiling.

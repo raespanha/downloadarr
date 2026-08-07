@@ -71,16 +71,25 @@ class Downloader:
                     await handle.truncate(info.size)
                 await manifest.save()
 
+            initial_downloaded = sum(c.downloaded for c in chunks)
+            prefer_full_get = (info.supports_ranges
+                               and self.config.transfer_mode != "parallel"
+                               and initial_downloaded == 0)
+            used_ranges = asyncio.Event()
+            counters = {"range_requests": 0, "retries": 0}
             semaphore = asyncio.Semaphore(self.config.connections)
             progress_lock = asyncio.Lock()
             async with PositionalWriter(part) as writer:
                 checkpoint = CheckpointWriter(writer, manifest,
                                               byte_interval=self.config.checkpoint_bytes,
                                               time_interval=self.config.checkpoint_interval)
+                checkpoint.start()
                 async def run(chunk: ChunkState) -> None:
                     await self._download_chunk(session, urls, url, urls.generation, info, chunk,
                                                checkpoint, manifest, semaphore, info.supports_ranges,
-                                               started, progress_callback, progress_lock, chunks)
+                                               started, progress_callback, progress_lock, chunks,
+                                               initial_downloaded, prefer_full_get, used_ranges,
+                                               counters)
                 try:
                     async with asyncio.TaskGroup() as group:
                         for chunk in chunks:
@@ -98,12 +107,20 @@ class Downloader:
             os.replace(part, destination)
             manifest_path.unlink(missing_ok=True)
         elapsed = time.monotonic() - started
-        return DownloadResult(destination, info.size, elapsed,
-                              info.size / elapsed if elapsed else 0.0, resumed,
-                              info.supports_ranges)
+        session_bytes = info.size - initial_downloaded
+        return DownloadResult(
+            destination, info.size, elapsed,
+            session_bytes / elapsed if elapsed else 0.0, resumed, used_ranges.is_set(),
+            session_byte_count=session_bytes,
+            cdn_host=urlsplit(urls.current).hostname,
+            range_requests=counters["range_requests"],
+            retry_count=counters["retries"],
+        )
 
     def _chunks(self, total: int, ranged: bool) -> list[ChunkState]:
-        count = min(self.config.connections, total) if ranged else 1
+        count = (min(self.config.connections * self.config.segments_per_connection, total)
+                 if (ranged and self.config.transfer_mode == "parallel"
+                     and self.config.connections > 1) else 1)
         width, remainder = divmod(total, count)
         chunks, start = [], 0
         for index in range(count):
@@ -114,13 +131,18 @@ class Downloader:
 
     async def _download_chunk(self, session, urls, initial_url, generation, info, chunk, writer,
                               manifest, semaphore, ranged, started, callback, progress_lock,
-                              chunks) -> None:
+                              chunks, initial_downloaded, prefer_full_get, used_ranges,
+                              counters) -> None:
         url = initial_url
         for attempt in range(self.config.retries + 1):
             try:
                 offset = chunk.start + chunk.downloaded
-                headers = {"Range": f"bytes={offset}-{chunk.end}"} if ranged else {}
-                if ranged and info.validator:
+                request_ranged = ranged and not (prefer_full_get and attempt == 0 and offset == 0)
+                headers = {"Range": f"bytes={offset}-{chunk.end}"} if request_ranged else {}
+                if request_ranged:
+                    used_ranges.set()
+                    counters["range_requests"] += 1
+                if request_ranged and info.validator:
                     headers["If-Range"] = info.validator
                 retry_status = None
                 retry_header = None
@@ -130,7 +152,7 @@ class Downloader:
                             retry_status = response.status
                             retry_header = response.headers.get("Retry-After")
                         else:
-                            self._validate_response(response, ranged, offset, chunk.end, info)
+                            self._validate_response(response, request_ranged, offset, chunk.end, info)
                             expected = chunk.end - offset + 1
                             received = 0
                             async for block in response.content.iter_chunked(self.config.block_size):
@@ -138,7 +160,8 @@ class Downloader:
                                     raise ProtocolError(f"chunk {chunk.index} exceeded its byte range")
                                 await writer.write(chunk, offset + received, block)
                                 received += len(block)
-                                await self._progress(callback, progress_lock, started, info.size, chunks)
+                                await self._progress(callback, progress_lock, started, info.size,
+                                                     chunks, initial_downloaded)
                             if received != expected:
                                 raise aiohttp.ClientPayloadError(
                                     f"truncated chunk {chunk.index}: {received}/{expected}")
@@ -149,6 +172,7 @@ class Downloader:
                     raise DownloadError(f"HTTP {retry_status}")
                 if attempt >= self.config.retries:
                     raise RetryExhausted(f"chunk {chunk.index} exhausted retries after HTTP {retry_status}")
+                counters["retries"] += 1
                 await asyncio.sleep(self._delay(attempt, retry_header))
             except (aiohttp.ClientError, asyncio.TimeoutError) as error:
                 if not ranged and chunk.downloaded:
@@ -157,6 +181,7 @@ class Downloader:
                     await manifest.save()
                 if attempt >= self.config.retries:
                     raise RetryExhausted(f"chunk {chunk.index} exhausted retries: {error}") from error
+                counters["retries"] += 1
                 await asyncio.sleep(self._delay(attempt, None))
 
     async def _probe_with_retry(self, session, urls):
@@ -207,7 +232,7 @@ class Downloader:
 
     @staticmethod
     async def _finish_checkpoint(checkpoint: CheckpointWriter) -> None:
-        task = asyncio.create_task(checkpoint.checkpoint())
+        task = asyncio.create_task(checkpoint.finish())
         try:
             await asyncio.shield(task)
         except asyncio.CancelledError:
@@ -231,13 +256,16 @@ class Downloader:
         return min(self.config.backoff_base * (2 ** attempt), self.config.backoff_max)
 
     @staticmethod
-    async def _progress(callback, lock, started, total, chunks) -> None:
+    async def _progress(callback, lock, started, total, chunks, initial_downloaded) -> None:
         if callback is None:
             return
         async with lock:
-            value = TransferProgress(total, sum(c.downloaded for c in chunks),
-                                     time.monotonic() - started, sum(c.done for c in chunks),
-                                     len(chunks))
+            downloaded = sum(c.downloaded for c in chunks)
+            value = TransferProgress(
+                total, downloaded, time.monotonic() - started,
+                sum(c.done for c in chunks), len(chunks),
+                max(downloaded - initial_downloaded, 0),
+            )
             result = callback(value)
             if inspect.isawaitable(result):
                 await result

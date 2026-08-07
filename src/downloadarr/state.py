@@ -29,6 +29,7 @@ class TransferProgress:
     elapsed: float
     chunks_done: int
     chunks_total: int
+    session_downloaded_bytes: int = 0
 
 
 ProgressCallback = Callable[[TransferProgress], Awaitable[None] | None]
@@ -42,3 +43,7 @@ class DownloadResult:
     average_speed: float
     resumed: bool
     used_ranges: bool
+    session_byte_count: int | None = None
+    cdn_host: str | None = None
+    range_requests: int = 0
+    retry_count: int = 0

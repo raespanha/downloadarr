@@ -46,6 +46,7 @@ Backing up `/config` preserves both settings and the SQLite database.
     "path": "/downloads",
     "connections": 8,
     "provider_max_connections": 4,
+    "transfer_mode": "auto",
     "categories": {
       "tv-sonarr": "/downloads/tv-sonarr",
       "radarr": "/downloads/radarr"
@@ -95,6 +96,7 @@ the image working directory and bypass the mounted `/config` directory.
 | `path` | path | Local/container-visible completed download root |
 | `connections` | integer | Between 1 and 256 |
 | `provider_max_connections` | integer | Provider-specific connection ceiling; TorBox recommends 4 |
+| `transfer_mode` | string | `auto`, `sequential`, or `parallel`; `auto` uses a full GET for fresh files |
 | `categories` | object | Category names mapped to container-visible save paths |
 
 ### qBittorrent facade
@@ -138,6 +140,7 @@ Environment variables take precedence over the JSON document:
 | `DOWNLOADARR_DOWNLOAD_PATH` | `download.path` |
 | `DOWNLOADARR_CONNECTIONS` | `download.connections` |
 | `DOWNLOADARR_PROVIDER_MAX_CONNECTIONS` | `download.provider_max_connections` |
+| `DOWNLOADARR_TRANSFER_MODE` | `download.transfer_mode` |
 | `DOWNLOADARR_USERNAME` | `qbittorrent.username` |
 | `DOWNLOADARR_PASSWORD` | `qbittorrent.password` |
 | `DOWNLOADARR_API_KEY` | `qbittorrent.api_key` |

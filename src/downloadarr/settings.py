@@ -5,7 +5,7 @@ import shutil
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
@@ -20,6 +20,7 @@ class DownloadSettings(BaseModel):
     path: str = "/downloads"
     connections: int = 8
     provider_max_connections: int = 4
+    transfer_mode: Literal["auto", "sequential", "parallel"] = "auto"
     categories: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("path", mode="before")
@@ -187,6 +188,7 @@ ENVIRONMENT_OVERRIDES: dict[str, tuple[str, ...]] = {
     "DOWNLOADARR_DOWNLOAD_PATH": ("download", "path"),
     "DOWNLOADARR_CONNECTIONS": ("download", "connections"),
     "DOWNLOADARR_PROVIDER_MAX_CONNECTIONS": ("download", "provider_max_connections"),
+    "DOWNLOADARR_TRANSFER_MODE": ("download", "transfer_mode"),
     "DOWNLOADARR_USERNAME": ("qbittorrent", "username"),
     "DOWNLOADARR_PASSWORD": ("qbittorrent", "password"),
     "DOWNLOADARR_API_KEY": ("qbittorrent", "api_key"),

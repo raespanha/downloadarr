@@ -34,6 +34,7 @@ def create_app(settings: Settings | None = None, provider: TorrentProvider | Non
                                  download_path=configured.download_path,
                                  download_connections=min(configured.download.connections,
                                                           configured.download.provider_max_connections),
+                                 download_transfer_mode=configured.download.transfer_mode,
                                  downloader=downloader)
         for name, path in configured.download.categories.items():
             await job_service.ensure_category(name, path)

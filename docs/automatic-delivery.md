@@ -15,9 +15,12 @@ Sonarr or Radarr until every selected file is safely published locally.
    atomically publish the final file.
 6. Mark the job `completed` only after all persisted files are complete.
 
-The default downloader setting remains eight connections for generic HTTP
-servers. `download.provider_max_connections` caps provider deliveries at four
-connections by default to comply with TorBox's current recommendation.
+The connection setting remains eight for explicit generic parallel HTTP
+transfers. `download.provider_max_connections` caps provider deliveries at
+four connections by default to comply with TorBox's current recommendation.
+Fresh `auto` transfers use a browser-style full GET; interrupted transfers can
+continue with validated ranges. Set `download.transfer_mode` to `parallel` to
+force dynamic segmented delivery up to the provider ceiling.
 
 ## qBittorrent facade
 

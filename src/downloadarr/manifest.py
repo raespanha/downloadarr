@@ -2,13 +2,14 @@ import asyncio
 import json
 import os
 import tempfile
+import time
 from pathlib import Path
 
 from .state import ChunkState
 
 
 class Manifest:
-    VERSION = 2
+    VERSION = 3
 
     def __init__(self, path: Path, total: int, ranged: bool, identity: dict,
                  chunks: list[ChunkState]) -> None:
@@ -22,27 +23,31 @@ class Manifest:
                 "chunks": [{"index": c.index, "start": c.start, "end": c.end,
                             "downloaded": c.downloaded} for c in self.chunks]}
 
-    async def save(self) -> None:
+    async def save(self, snapshot: dict | None = None) -> None:
         async with self._lock:
-            payload = json.dumps(self.data(), separators=(",", ":"))
-            fd, name = tempfile.mkstemp(prefix=self.path.name + ".", suffix=".tmp",
-                                        dir=self.path.parent)
-            temp = Path(name)
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                    handle.write(payload)
-                    handle.flush()
-                    os.fsync(handle.fileno())
-                for attempt in range(5):
-                    try:
-                        await asyncio.to_thread(os.replace, temp, self.path)
-                        break
-                    except PermissionError:
-                        if attempt == 4:
-                            raise
-                        await asyncio.sleep(0.02 * (attempt + 1))
-            finally:
-                temp.unlink(missing_ok=True)
+            payload = json.dumps(snapshot if snapshot is not None else self.data(),
+                                 separators=(",", ":"))
+            await asyncio.to_thread(self._save_sync, payload)
+
+    def _save_sync(self, payload: str) -> None:
+        fd, name = tempfile.mkstemp(prefix=self.path.name + ".", suffix=".tmp",
+                                    dir=self.path.parent)
+        temp = Path(name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            for attempt in range(5):
+                try:
+                    os.replace(temp, self.path)
+                    break
+                except PermissionError:
+                    if attempt == 4:
+                        raise
+                    time.sleep(0.02 * (attempt + 1))
+        finally:
+            temp.unlink(missing_ok=True)
 
     @classmethod
     def restore(cls, path: Path, total: int, ranged: bool, identity: dict,
