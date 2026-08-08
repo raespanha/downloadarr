@@ -32,7 +32,7 @@ are supported; pure BitTorrent v2 torrents are rejected until the facade can
 represent their 64-character hashes correctly.
 
 While local delivery is active, `/api/v2/torrents/info` returns `downloading`.
-After local publication it returns `stalledUP`, a completion timestamp, and the
+After local publication it returns `pausedUP`, a completion timestamp, and the
 exact `content_path`. `/api/v2/torrents/files` reports persisted per-file names,
 sizes, and progress.
 
@@ -46,6 +46,11 @@ failed provider cleanup preserves the SQLite job and resumable local state.
 Completed jobs report `pausedUP`, allowing Arr applications to recognize a
 stopped, import-ready item and apply their configured completed-download
 cleanup behavior.
+
+The full import and post-import removal contract can be checked with the
+opt-in `downloadarr-verify-arr-cleanup` command documented in
+`docs/live-arr-cleanup-test.md`. It is kept separate from routine tests because
+the live variant observes real Arr and filesystem state.
 
 ## Restart behavior
 

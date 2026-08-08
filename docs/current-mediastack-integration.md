@@ -146,6 +146,13 @@ implemented after the test exposed the missing cleanup behavior. The remaining
 live verification is completed-job removal after Arr import and the equivalent
 Radarr movie flow.
 
+That remaining verification is now automated by
+`downloadarr-verify-arr-cleanup`; see `docs/live-arr-cleanup-test.md`. The
+verifier is passive and requires an explicitly selected info hash. It checks
+the Arr import record and library file, waits for Downloadarr removal, and can
+also validate the mapped host library and staging paths. A fresh approved live
+release is still required to execute the external test.
+
 The first end-to-end import test should use a small, explicitly approved legal
 media fixture that Arr can identify. The Debian fixture remains useful for raw
 TorBox/download stress testing, but cannot prove Sonarr or Radarr importing.
