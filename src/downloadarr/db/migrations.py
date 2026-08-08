@@ -60,5 +60,35 @@ CREATE INDEX ix_delivery_files_job_id ON delivery_files(job_id);
     3: """
 ALTER TABLE jobs ADD COLUMN source_kind VARCHAR(16) NOT NULL DEFAULT 'magnet';
 ALTER TABLE jobs ADD COLUMN source_data BLOB;
+""",
+    4: """
+CREATE TABLE transfer_history (
+    id VARCHAR(36) NOT NULL PRIMARY KEY,
+    job_id VARCHAR(36) NOT NULL,
+    provider_file_id INTEGER NOT NULL,
+    info_hash VARCHAR(40) NOT NULL,
+    name TEXT NOT NULL,
+    category VARCHAR(255) NOT NULL,
+    relative_path TEXT NOT NULL,
+    provider VARCHAR(32) NOT NULL,
+    remote_id INTEGER,
+    status VARCHAR(32) NOT NULL,
+    total_bytes INTEGER NOT NULL,
+    transferred_bytes INTEGER NOT NULL,
+    elapsed FLOAT NOT NULL,
+    average_speed INTEGER NOT NULL,
+    peak_speed INTEGER NOT NULL,
+    connections INTEGER NOT NULL,
+    used_ranges INTEGER NOT NULL,
+    range_requests INTEGER NOT NULL,
+    retry_count INTEGER NOT NULL,
+    resumed INTEGER NOT NULL,
+    cdn_host VARCHAR(255),
+    started_at DATETIME NOT NULL,
+    completed_at DATETIME NOT NULL,
+    UNIQUE (job_id, provider_file_id)
+);
+CREATE INDEX idx_transfer_history_completed_at ON transfer_history(completed_at);
+CREATE INDEX idx_transfer_history_info_hash ON transfer_history(info_hash);
 """
 }

@@ -149,6 +149,7 @@ async def test_dashboard_requires_login_and_lists_jobs_without_secrets(tmp_path)
             response = await client.get("/", follow_redirects=False)
             assert response.status_code == 303 and response.headers["location"] == "/ui/login"
             assert (await client.get("/ui/api/jobs")).status_code == 403
+            assert (await client.get("/ui/api/performance")).status_code == 403
             await login(client)
             await client.post("/api/v2/torrents/add", data={"urls": MAGNET})
             page = await client.get("/")
@@ -314,6 +315,49 @@ async def test_ready_torrent_is_delivered_before_reporting_completion(tmp_path):
         assert downloader.destinations[0].read_bytes() == b"hello"
         properties = (await client.get(f"/api/v2/torrents/properties?hash={HASH}")).json()
         assert properties["completion_date"] > 0
+
+
+async def test_performance_history_survives_arr_cleanup(tmp_path):
+    class TelemetryDownloader(FakeDownloader):
+        async def download(self, url_provider, destination, progress_callback=None):
+            await url_provider(False)
+            destination = Path(destination)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(self.payload)
+            self.destinations.append(destination)
+            return DownloadResult(
+                destination, len(self.payload), 2.0, 200, False, True,
+                session_byte_count=400, cdn_host="cdn.example.test",
+                range_requests=8, retry_count=1, peak_speed=350, connections=4,
+            )
+
+    provider, downloader = FakeProvider(), TelemetryDownloader()
+    provider.torrent = ProviderTorrent(42, HASH, "Test.Release", "cached", 5,
+                                       1, 0, 0, True, True)
+    async with client_for(tmp_path, provider, downloader) as (client, app, provider):
+        await login(client)
+        await client.post("/api/v2/torrents/add", data={"urls": MAGNET})
+        job = (await app.state.job_service.jobs())[0]
+        for _ in range(4):
+            await app.state.job_service.process(job.id)
+
+        values = (await client.get("/ui/api/performance?range=7d")).json()
+        assert values["summary"] == {
+            "downloads": 1, "files": 1, "bytes": 5,
+            "average_speed": 200, "peak_speed": 350, "retries": 1,
+            "range_transfers": 1, "resumed": 0,
+        }
+        assert values["timeline"][0]["average_speed"] == 200
+        assert values["recent"][0]["connections"] == 4
+        assert values["recent"][0]["cdn_host"] == "cdn.example.test"
+        assert (await client.get("/ui/api/performance?range=invalid")).status_code == 400
+
+        await client.post("/api/v2/torrents/delete",
+                          data={"hashes": HASH, "deleteFiles": "true"})
+        assert await app.state.job_service.job(HASH) is None
+        retained = (await client.get("/ui/api/performance?range=all")).json()
+        assert retained["summary"]["downloads"] == 1
+        assert retained["recent"][0]["info_hash"] == HASH
 
 
 async def test_delete_endpoint_optionally_removes_delivered_files(tmp_path):

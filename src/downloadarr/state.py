@@ -47,3 +47,5 @@ class DownloadResult:
     cdn_host: str | None = None
     range_requests: int = 0
     retry_count: int = 0
+    peak_speed: float = 0.0
+    connections: int = 1

@@ -88,6 +88,8 @@ async def test_parallel_exact_hash(server, tmp_path, connections):
     assert hashlib.sha256(result.path.read_bytes()).digest() == hashlib.sha256(DATA).digest()
     assert result.used_ranges
     assert result.range_requests == len(Downloader(config)._chunks(len(DATA), True))
+    assert result.connections == connections
+    assert result.peak_speed >= result.average_speed > 0
     assert result.session_byte_count == len(DATA)
     assert result.cdn_host == "127.0.0.1"
     assert not (tmp_path / "result.bin.downloadarr.part").exists()

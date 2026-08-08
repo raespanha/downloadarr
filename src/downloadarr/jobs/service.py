@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
@@ -9,12 +10,16 @@ from sqlalchemy.exc import IntegrityError
 
 from ..config import DownloadConfig
 from ..db.engine import Database
-from ..db.models import Category, DeliveryFile, Job, JobState, ProviderJob
+from ..db.models import (Category, DeliveryFile, Job, JobState, ProviderJob,
+                         TransferHistory)
 from ..downloader import Downloader
 from ..errors import DownloadError
 from ..magnets import MagnetInfo
 from ..torrents import TorrentInfo
 from ..providers.base import ProviderError, TorrentProvider
+
+
+logger = logging.getLogger(__name__)
 
 
 class JobService:
@@ -105,6 +110,19 @@ class JobService:
     async def job(self, info_hash: str) -> Job | None:
         async with self.database.session() as session:
             return await session.scalar(select(Job).where(Job.info_hash == info_hash.lower()))
+
+    async def transfer_history(self, since: datetime | None = None,
+                               limit: int | None = None) -> list[TransferHistory]:
+        statement = select(TransferHistory)
+        if since is not None:
+            statement = statement.where(TransferHistory.completed_at >= since)
+        statement = statement.order_by(TransferHistory.completed_at.desc())
+        if limit is not None:
+            statement = statement.limit(limit)
+        async with self.database.session() as session:
+            values = list((await session.scalars(statement)).all())
+        values.reverse()
+        return values
 
     async def due_job_ids(self, limit: int = 100) -> list[str]:
         terminal = [JobState.COMPLETED.value, JobState.FAILED.value]
@@ -263,6 +281,7 @@ class JobService:
                     last_checkpoint = now
                     await session.commit()
 
+            transfer_started_at = _now()
             result = await self.downloader.download(url_provider, destination, progress)
             if result.byte_count != item.size:
                 raise ValueError(f"downloaded size mismatch for {item.relative_path}")
@@ -270,6 +289,43 @@ class JobService:
             completed = sum(value.downloaded for value in job.delivery_files)
             job.progress = completed / total if total else 1.0
             job.download_speed = int(result.average_speed)
+            session.add(TransferHistory(
+                job_id=job.id,
+                provider_file_id=item.provider_file_id,
+                info_hash=job.info_hash,
+                name=job.name or job.info_hash,
+                category=job.category.name if job.category else "",
+                relative_path=item.relative_path,
+                provider=job.provider_job.provider,
+                remote_id=job.provider_job.remote_id,
+                status="completed",
+                total_bytes=result.byte_count,
+                transferred_bytes=(result.session_byte_count
+                                   if result.session_byte_count is not None
+                                   else result.byte_count),
+                elapsed=result.elapsed,
+                average_speed=int(result.average_speed),
+                peak_speed=int(result.peak_speed),
+                connections=result.connections,
+                used_ranges=result.used_ranges,
+                range_requests=result.range_requests,
+                retry_count=result.retry_count,
+                resumed=result.resumed,
+                cdn_host=result.cdn_host,
+                started_at=transfer_started_at,
+                completed_at=_now(),
+            ))
+            logger.info(
+                "transfer_completed info_hash=%s file=%r bytes=%d transferred_bytes=%d "
+                "elapsed=%.3f average_bps=%d peak_bps=%d connections=%d ranges=%s "
+                "range_requests=%d retries=%d resumed=%s cdn=%s",
+                job.info_hash, item.relative_path, result.byte_count,
+                result.session_byte_count if result.session_byte_count is not None
+                else result.byte_count,
+                result.elapsed, int(result.average_speed), int(result.peak_speed),
+                result.connections, result.used_ranges, result.range_requests,
+                result.retry_count, result.resumed, result.cdn_host or "unknown",
+            )
         job.state, job.progress = JobState.COMPLETED.value, 1.0
         job.download_speed, job.eta = 0, 0
         job.completed_at, job.next_poll_at = _now(), None

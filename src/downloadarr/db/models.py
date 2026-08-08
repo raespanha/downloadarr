@@ -90,3 +90,34 @@ class DeliveryFile(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow,
                                                   onupdate=utcnow)
     job: Mapped[Job] = relationship(back_populates="delivery_files")
+
+
+class TransferHistory(Base):
+    __tablename__ = "transfer_history"
+    __table_args__ = (UniqueConstraint("job_id", "provider_file_id"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True,
+                                    default=lambda: str(uuid.uuid4()))
+    # Deliberately not a foreign key: operational jobs are deleted after Arr
+    # imports, while performance history must remain available.
+    job_id: Mapped[str] = mapped_column(String(36))
+    provider_file_id: Mapped[int] = mapped_column(Integer)
+    info_hash: Mapped[str] = mapped_column(String(40), index=True)
+    name: Mapped[str] = mapped_column(Text)
+    category: Mapped[str] = mapped_column(String(255), default="")
+    relative_path: Mapped[str] = mapped_column(Text)
+    provider: Mapped[str] = mapped_column(String(32), default="torbox")
+    remote_id: Mapped[int | None] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(32), default="completed")
+    total_bytes: Mapped[int] = mapped_column(Integer)
+    transferred_bytes: Mapped[int] = mapped_column(Integer)
+    elapsed: Mapped[float] = mapped_column(Float)
+    average_speed: Mapped[int] = mapped_column(Integer)
+    peak_speed: Mapped[int] = mapped_column(Integer)
+    connections: Mapped[int] = mapped_column(Integer)
+    used_ranges: Mapped[bool] = mapped_column(Integer)
+    range_requests: Mapped[int] = mapped_column(Integer)
+    retry_count: Mapped[int] = mapped_column(Integer)
+    resumed: Mapped[bool] = mapped_column(Integer)
+    cdn_host: Mapped[str | None] = mapped_column(String(255))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)

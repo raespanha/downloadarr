@@ -7,6 +7,9 @@ Sonarr/Radarr.
 The first dashboard slice provides:
 
 - live job state, category, local byte progress, speed, ETA, and errors;
+- durable 7-day, 30-day, and all-time performance timelines with weighted
+  average speed, smoothed peak speed, delivered bytes, retries, and recent
+  transfer details;
 - explicit TorBox queue/provider/local-delivery phase labels;
 - removal controls that also clean up the corresponding TorBox object;
 - masked TorBox credentials; and
@@ -24,3 +27,7 @@ rendered into the page.
 
 Environment-managed fields are listed in the settings panel. A saved file
 cannot override those fields while their environment variables remain set.
+
+Performance data is stored independently from operational jobs, so normal Arr
+post-import cleanup does not erase it. See `docs/performance-history.md` for
+metric definitions, API details, logging, and retention behavior.

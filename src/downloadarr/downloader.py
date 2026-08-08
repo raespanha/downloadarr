@@ -3,6 +3,7 @@ import email.utils
 import inspect
 import os
 import time
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -72,11 +73,14 @@ class Downloader:
                 await manifest.save()
 
             initial_downloaded = sum(c.downloaded for c in chunks)
+            pending_chunks = sum(not chunk.done for chunk in chunks)
             prefer_full_get = (info.supports_ranges
                                and self.config.transfer_mode != "parallel"
                                and initial_downloaded == 0)
             used_ranges = asyncio.Event()
             counters = {"range_requests": 0, "retries": 0}
+            speed_samples = deque([(started, 0)])
+            speed_metrics = {"peak": 0.0}
             semaphore = asyncio.Semaphore(self.config.connections)
             progress_lock = asyncio.Lock()
             async with PositionalWriter(part) as writer:
@@ -89,7 +93,7 @@ class Downloader:
                                                checkpoint, manifest, semaphore, info.supports_ranges,
                                                started, progress_callback, progress_lock, chunks,
                                                initial_downloaded, prefer_full_get, used_ranges,
-                                               counters)
+                                               counters, speed_samples, speed_metrics)
                 try:
                     async with asyncio.TaskGroup() as group:
                         for chunk in chunks:
@@ -108,13 +112,16 @@ class Downloader:
             manifest_path.unlink(missing_ok=True)
         elapsed = time.monotonic() - started
         session_bytes = info.size - initial_downloaded
+        average_speed = session_bytes / elapsed if elapsed else 0.0
         return DownloadResult(
-            destination, info.size, elapsed,
-            session_bytes / elapsed if elapsed else 0.0, resumed, used_ranges.is_set(),
+            destination, info.size, elapsed, average_speed, resumed, used_ranges.is_set(),
             session_byte_count=session_bytes,
             cdn_host=urlsplit(urls.current).hostname,
             range_requests=counters["range_requests"],
             retry_count=counters["retries"],
+            peak_speed=max(speed_metrics["peak"], average_speed),
+            connections=(max(1, min(self.config.connections, pending_chunks))
+                         if used_ranges.is_set() else 1),
         )
 
     def _chunks(self, total: int, ranged: bool) -> list[ChunkState]:
@@ -132,7 +139,7 @@ class Downloader:
     async def _download_chunk(self, session, urls, initial_url, generation, info, chunk, writer,
                               manifest, semaphore, ranged, started, callback, progress_lock,
                               chunks, initial_downloaded, prefer_full_get, used_ranges,
-                              counters) -> None:
+                              counters, speed_samples, speed_metrics) -> None:
         url = initial_url
         for attempt in range(self.config.retries + 1):
             try:
@@ -161,7 +168,8 @@ class Downloader:
                                 await writer.write(chunk, offset + received, block)
                                 received += len(block)
                                 await self._progress(callback, progress_lock, started, info.size,
-                                                     chunks, initial_downloaded)
+                                                     chunks, initial_downloaded, speed_samples,
+                                                     speed_metrics)
                             if received != expected:
                                 raise aiohttp.ClientPayloadError(
                                     f"truncated chunk {chunk.index}: {received}/{expected}")
@@ -256,15 +264,29 @@ class Downloader:
         return min(self.config.backoff_base * (2 ** attempt), self.config.backoff_max)
 
     @staticmethod
-    async def _progress(callback, lock, started, total, chunks, initial_downloaded) -> None:
-        if callback is None:
-            return
+    async def _progress(callback, lock, started, total, chunks, initial_downloaded,
+                        speed_samples, speed_metrics) -> None:
         async with lock:
             downloaded = sum(c.downloaded for c in chunks)
+            now = time.monotonic()
+            session_downloaded = max(downloaded - initial_downloaded, 0)
+            speed_samples.append((now, session_downloaded))
+            cutoff = now - 3.0
+            while len(speed_samples) > 2 and speed_samples[1][0] <= cutoff:
+                speed_samples.popleft()
+            sample_started, sample_bytes = speed_samples[0]
+            sample_elapsed = now - sample_started
+            if sample_elapsed >= 0.25:
+                speed_metrics["peak"] = max(
+                    speed_metrics["peak"],
+                    (session_downloaded - sample_bytes) / sample_elapsed,
+                )
+            if callback is None:
+                return
             value = TransferProgress(
-                total, downloaded, time.monotonic() - started,
+                total, downloaded, now - started,
                 sum(c.done for c in chunks), len(chunks),
-                max(downloaded - initial_downloaded, 0),
+                session_downloaded,
             )
             result = callback(value)
             if inspect.isawaitable(result):

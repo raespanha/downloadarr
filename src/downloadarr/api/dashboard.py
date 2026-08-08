@@ -1,5 +1,7 @@
 import hmac
 import json
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -71,6 +73,21 @@ async def jobs(request: Request) -> JSONResponse:
     return JSONResponse([_job_json(job) for job in values])
 
 
+@router.get("/ui/api/performance", dependencies=[Depends(require_auth)])
+async def performance(request: Request, range: str = "7d") -> JSONResponse:
+    now = datetime.now(timezone.utc)
+    if range == "7d":
+        since, bucket = now - timedelta(days=7), "day"
+    elif range == "30d":
+        since, bucket = now - timedelta(days=30), "day"
+    elif range == "all":
+        since, bucket = None, "month"
+    else:
+        raise HTTPException(status_code=400, detail="range must be 7d, 30d, or all")
+    values = await request.app.state.job_service.transfer_history(since)
+    return JSONResponse(_performance_json(values, range, bucket))
+
+
 @router.post("/ui/jobs/{info_hash}/remove", dependencies=[Depends(require_auth)])
 async def remove_job(info_hash: str, request: Request) -> Response:
     _require_same_origin(request)
@@ -136,6 +153,64 @@ def _job_json(job: Job) -> dict:
         "eta": job.eta,
         "error": job.error_message,
         "created_at": job.created_at.isoformat(),
+    }
+
+
+def _performance_json(values, selected_range: str, bucket: str) -> dict:
+    groups = defaultdict(list)
+    for value in values:
+        completed = value.completed_at
+        key = (completed.strftime("%Y-%m") if bucket == "month"
+               else completed.strftime("%Y-%m-%d"))
+        groups[key].append(value)
+
+    timeline = []
+    for label, items in sorted(groups.items()):
+        elapsed = sum(item.elapsed for item in items)
+        transferred = sum(item.transferred_bytes for item in items)
+        timeline.append({
+            "label": label,
+            "transfers": len(items),
+            "bytes": sum(item.total_bytes for item in items),
+            "average_speed": int(transferred / elapsed) if elapsed else 0,
+            "peak_speed": max((item.peak_speed for item in items), default=0),
+            "retries": sum(item.retry_count for item in items),
+        })
+
+    total_elapsed = sum(value.elapsed for value in values)
+    total_transferred = sum(value.transferred_bytes for value in values)
+    recent = [{
+        "info_hash": value.info_hash,
+        "name": value.name,
+        "category": value.category,
+        "file": value.relative_path,
+        "bytes": value.total_bytes,
+        "transferred_bytes": value.transferred_bytes,
+        "elapsed": value.elapsed,
+        "average_speed": value.average_speed,
+        "peak_speed": value.peak_speed,
+        "connections": value.connections,
+        "used_ranges": value.used_ranges,
+        "range_requests": value.range_requests,
+        "retries": value.retry_count,
+        "resumed": value.resumed,
+        "cdn_host": value.cdn_host,
+        "completed_at": value.completed_at.isoformat(),
+    } for value in reversed(values[-20:])]
+    return {
+        "range": selected_range,
+        "summary": {
+            "downloads": len({value.job_id for value in values}),
+            "files": len(values),
+            "bytes": sum(value.total_bytes for value in values),
+            "average_speed": int(total_transferred / total_elapsed) if total_elapsed else 0,
+            "peak_speed": max((value.peak_speed for value in values), default=0),
+            "retries": sum(value.retry_count for value in values),
+            "range_transfers": sum(bool(value.used_ranges) for value in values),
+            "resumed": sum(bool(value.resumed) for value in values),
+        },
+        "timeline": timeline,
+        "recent": recent,
     }
 
 
