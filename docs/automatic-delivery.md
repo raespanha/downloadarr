@@ -15,6 +15,11 @@ Sonarr or Radarr until every selected file is safely published locally.
    atomically publish the final file.
 6. Mark the job `completed` only after all persisted files are complete.
 
+New TorBox submissions use `as_queued=false`, allowing cached items to start
+immediately when the account has an available slot. Downloadarr still supports
+genuine provider-queued responses and polls them until TorBox assigns a torrent
+ID; it does not deliberately force every Arr grab into TorBox's manual queue.
+
 The connection setting remains eight for explicit generic parallel HTTP
 transfers. `download.provider_max_connections` caps provider deliveries at
 four connections by default to comply with TorBox's current recommendation.
@@ -46,6 +51,10 @@ failed provider cleanup preserves the SQLite job and resumable local state.
 Completed jobs report `pausedUP`, allowing Arr applications to recognize a
 stopped, import-ready item and apply their configured completed-download
 cleanup behavior.
+
+The qBittorrent response also reports a zero ratio and zero seeding-time limit.
+Debrid jobs never seed, so these explicit limits tell Servarr that the stopped
+item has already reached its seed goal and may be removed after import.
 
 The full import and post-import removal contract can be checked with the
 opt-in `downloadarr-verify-arr-cleanup` command documented in

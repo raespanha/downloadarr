@@ -142,9 +142,9 @@ and `/series` are separate host mounts; on native Linux, placing staging and
 library paths on one filesystem allows hardlinks and avoids that copy delay.
 
 Structured active-job cancellation and TorBox torrent/queue deletion were
-implemented after the test exposed the missing cleanup behavior. The remaining
-live verification is completed-job removal after Arr import and the equivalent
-Radarr movie flow.
+implemented after the test exposed the missing cleanup behavior. Completed-job
+removal after a Sonarr import was verified end-to-end on 2026-08-08. The
+remaining equivalent live verification is the Radarr movie flow.
 
 That remaining verification is now automated by
 `downloadarr-verify-arr-cleanup`; see `docs/live-arr-cleanup-test.md`. The

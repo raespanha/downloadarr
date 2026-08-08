@@ -4,6 +4,8 @@ services:
       context: .
     image: downloadarr:local
     container_name: downloadarr
+    env_file:
+      - .env
     ports:
       - "6500:6500"
     volumes:

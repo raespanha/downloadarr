@@ -30,7 +30,7 @@ async def test_create_and_poll_torbox(torbox_server):
         seen.append((request.method, request.path, request.headers.get("Authorization")))
         if request.path.endswith("createtorrent"):
             form = await request.post()
-            assert form["allow_zip"] == "false" and form["as_queued"] == "true"
+            assert form["allow_zip"] == "false" and form["as_queued"] == "false"
             return web.json_response({"success": True, "data": {"torrent_id": 42}})
         return web.json_response({"success": True, "data": {"id": 42, "hash": HASH,
             "name": "Release", "size": 100, "progress": 50, "download_speed": 10,
@@ -58,6 +58,7 @@ async def test_create_binary_torrent(torbox_server):
         assert upload.filename == "release.torrent"
         assert upload.file.read() == payload
         assert form["allow_zip"] == "false"
+        assert form["as_queued"] == "false"
         return web.json_response({"success": True, "data": {"torrent_id": 42}})
 
     provider = TorBoxProvider("secret", await torbox_server(handler))

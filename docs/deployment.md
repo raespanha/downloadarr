@@ -15,6 +15,10 @@ an image layer.
 
 ## Compose
 
+Copy `.env.example` to the ignored `.env` file and set `TORBOX_API_TOKEN`
+before starting the service. The Compose example injects this file into the
+container; environment settings override the JSON settings file.
+
 `compose.example.yml` is a standalone template. Set `DOWNLOADARR_MEDIA_PATH`
 to the host directory shared with Sonarr and Radarr:
 

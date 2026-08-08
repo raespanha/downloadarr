@@ -1,9 +1,10 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
+from aiohttp import ClientSession, web
 
-from downloadarr.arr_cleanup_test import (ImportEvidence, VerificationError, build_parser,
-                                           verify_arr_cleanup)
+from downloadarr.arr_cleanup_test import (ArrApi, ImportEvidence, VerificationError,
+                                           build_parser, verify_arr_cleanup)
 
 
 HASH = "1" * 40
@@ -82,3 +83,29 @@ async def test_verifier_rejects_missing_target_job():
 def test_cli_rejects_invalid_hash_before_contacting_services():
     with pytest.raises(SystemExit):
         build_parser().parse_args(["--arr", "sonarr", "--hash", "invalid"])
+
+
+async def test_arr_history_query_uses_uppercase_qbittorrent_id():
+    async def history(request):
+        assert request.query["downloadId"] == HASH.upper()
+        return web.json_response({"records": [{
+            "eventType": "downloadFolderImported",
+            "date": NOW.isoformat(),
+            "data": {"fileId": 7, "importedPath": "/series/show/episode.mkv",
+                     "droppedPath": "/torbox/tv/episode.mkv", "size": 5},
+        }]})
+
+    app = web.Application()
+    app.router.add_get("/api/v3/history", history)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = site._server.sockets[0].getsockname()[1]
+    try:
+        async with ClientSession() as session:
+            item = await ArrApi(session, f"http://127.0.0.1:{port}", "key", "sonarr").imported(
+                HASH.lower(), NOW - timedelta(seconds=1))
+        assert item is not None and item.file_id == 7
+    finally:
+        await runner.cleanup()

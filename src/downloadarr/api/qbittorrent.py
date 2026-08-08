@@ -184,7 +184,12 @@ def _torrent_json(job: Job, default_save_path: str) -> dict:
             "amount_left": size - completed, "completed": completed,
             "dlspeed": job.download_speed, "upspeed": 0,
             "eta": job.eta if job.eta is not None else 8640000,
-            "ratio": 0, "added_on": int(job.created_at.timestamp()),
+            # Debrid jobs never seed. Explicit zero limits tell Servarr that
+            # the paused completed item has already met its seed goal and is
+            # eligible for Completed Download Handling removal.
+            "ratio": 0, "ratio_limit": 0, "seeding_time": 0,
+            "seeding_time_limit": 0, "inactive_seeding_time_limit": 0,
+            "added_on": int(job.created_at.timestamp()),
             "completion_on": int(job.completed_at.timestamp()) if job.completed_at else 0}
 
 

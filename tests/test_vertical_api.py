@@ -304,6 +304,8 @@ async def test_ready_torrent_is_delivered_before_reporting_completion(tmp_path):
         assert completed.delivery_files[0].state == "completed"
         value = (await client.get("/api/v2/torrents/info")).json()[0]
         assert value["state"] == "pausedUP" and value["progress"] == 1
+        assert value["ratio"] == 0 and value["ratio_limit"] == 0
+        assert value["seeding_time"] == 0 and value["seeding_time_limit"] == 0
         assert value["content_path"].endswith("/Test.Release.mkv")
         files = (await client.get(f"/api/v2/torrents/files?hash={HASH}")).json()
         assert files == [{"index": 0, "name": "Test.Release.mkv", "size": 5,

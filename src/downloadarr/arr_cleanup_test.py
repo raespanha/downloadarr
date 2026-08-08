@@ -55,7 +55,9 @@ class ArrApi:
     async def imported(self, info_hash: str, since: datetime) -> ImportEvidence | None:
         payload = await self._get("/api/v3/history", params={
             "page": "1", "pageSize": "20", "sortKey": "date",
-            "sortDirection": "descending", "downloadId": info_hash,
+            # Servarr stores qBittorrent download IDs in uppercase and its
+            # history filter is case-sensitive.
+            "sortDirection": "descending", "downloadId": info_hash.upper(),
         })
         records = payload.get("records", []) if isinstance(payload, dict) else []
         for record in records:
@@ -239,6 +241,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--password", default=os.getenv("DOWNLOADARR_E2E_PASSWORD"))
     parser.add_argument("--timeout", type=float, default=7200)
     parser.add_argument("--poll-interval", type=float, default=5)
+    parser.add_argument("--lookback", type=float, default=30,
+                        help="accept an import recorded this many seconds before startup")
     parser.add_argument("--path-map", action="append", default=[], type=_path_map,
                         metavar="CONTAINER=HOST")
     return parser
@@ -262,7 +266,9 @@ async def _run(arguments: argparse.Namespace) -> VerificationResult:
         await downloadarr.login()
         return await verify_arr_cleanup(
             arr, downloadarr, arguments.info_hash, timeout=arguments.timeout,
-            poll_interval=arguments.poll_interval, path_maps=arguments.path_map)
+            poll_interval=arguments.poll_interval,
+            since=datetime.now(timezone.utc) - timedelta(seconds=arguments.lookback),
+            path_maps=arguments.path_map)
 
 
 def main() -> None:

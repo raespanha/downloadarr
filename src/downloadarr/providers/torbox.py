@@ -44,7 +44,10 @@ class TorBoxProvider:
     async def _create_torrent(self, form: aiohttp.FormData,
                               info_hash: str | None) -> ProviderSubmission:
         form.add_field("allow_zip", "false")
-        form.add_field("as_queued", "true")
+        # Let TorBox start cached items immediately when an account slot is
+        # available. ``true`` explicitly forces every submission to remain in
+        # TorBox's manual queue, which prevents normal Arr grabs from starting.
+        form.add_field("as_queued", "false")
         form.add_field("add_only_if_cached", "false")
         try:
             data = await self._request("POST", "/torrents/createtorrent", data=form)

@@ -46,6 +46,10 @@ contract has been observed. It exits nonzero on authentication errors, API
 errors, early removal, mismatched file records, missing mapped output, retained
 mapped staging data, or timeout.
 
+If the verifier itself must be restarted after the import has already begun or
+completed, use `--lookback 900` (or another bounded number of seconds) so it may
+accept that recent Arr history event while it waits for Downloadarr cleanup.
+
 Path maps are optional. Without them, the verifier still proves Arr's import
 history, Arr's library database record, and removal from Downloadarr. With
 them, it additionally checks the physical host files.
@@ -62,3 +66,27 @@ python -m pytest -q
 These deterministic tests cover successful cleanup, cleanup before import,
 missing jobs, and physical library/staging validation. The live command remains
 opt-in because a genuine Arr import necessarily changes external state.
+
+## 2026-08-08 Sonarr cycle
+
+A complete S03E06 replacement cycle validated the command and the live stack:
+
+- the existing 8.23 GB Sonarr library file was removed;
+- two stale Downloadarr jobs, their TorBox torrent/queue items, and staging data
+  were removed;
+- Sonarr interactive search selected a different accepted cached torrent;
+- Downloadarr delivered exactly `6338119104` bytes at approximately
+  18.6 MiB/s without transfer retries;
+- Sonarr imported and registered the exact-size replacement as file ID 150;
+- Sonarr automatically called Downloadarr's completed-download removal path;
+- the Downloadarr job, TorBox remote torrent, Sonarr queue entry, and staging
+  directory were absent afterward; and
+- the replacement library file remained at exactly `6338119104` bytes.
+
+The cycle exposed and corrected three integration defects:
+
+1. `as_queued=true` forced every TorBox submission into its manual queue;
+2. missing zero seed limits prevented Sonarr from considering `pausedUP` debrid
+   jobs eligible for removal; and
+3. the live verifier used a lowercase history filter even though Sonarr's
+   qBittorrent download IDs and filter are uppercase/case-sensitive.
