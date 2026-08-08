@@ -142,16 +142,18 @@ and `/series` are separate host mounts; on native Linux, placing staging and
 library paths on one filesystem allows hardlinks and avoids that copy delay.
 
 Structured active-job cancellation and TorBox torrent/queue deletion were
-implemented after the test exposed the missing cleanup behavior. Completed-job
-removal after a Sonarr import was verified end-to-end on 2026-08-08. The
-remaining equivalent live verification is the Radarr movie flow.
+implemented after the first Sonarr test exposed the missing cleanup behavior.
+Completed-job removal after a Sonarr import was verified end-to-end on
+2026-08-08. The equivalent Radarr replacement cycle passed later that day:
+Radarr imported an exact `1328716257`-byte movie, then removed the Downloadarr
+job, TorBox remote torrent, and staging directory while preserving the library
+file.
 
-That remaining verification is now automated by
-`downloadarr-verify-arr-cleanup`; see `docs/live-arr-cleanup-test.md`. The
-verifier is passive and requires an explicitly selected info hash. It checks
-the Arr import record and library file, waits for Downloadarr removal, and can
-also validate the mapped host library and staging paths. A fresh approved live
-release is still required to execute the external test.
+Both flows are verified by `downloadarr-verify-arr-cleanup`; see
+`docs/live-arr-cleanup-test.md`. The verifier is passive and requires an
+explicitly selected info hash. It checks the Arr import record and library
+file, waits for Downloadarr removal, and can also validate the mapped host
+library and staging paths.
 
 The first end-to-end import test should use a small, explicitly approved legal
 media fixture that Arr can identify. The Debian fixture remains useful for raw

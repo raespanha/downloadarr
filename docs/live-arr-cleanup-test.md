@@ -90,3 +90,23 @@ The cycle exposed and corrected three integration defects:
    jobs eligible for removal; and
 3. the live verifier used a lowercase history filter even though Sonarr's
    qBittorrent download IDs and filter are uppercase/case-sensitive.
+
+## 2026-08-08 Radarr cycle
+
+The equivalent destructive replacement cycle also passed for Radarr using
+`The Lion King 1½ (2004)` as the smallest existing library target:
+
+- Radarr movie file ID 8 and its exact `807310164`-byte physical file were
+  removed while the monitored movie record remained intact;
+- an accepted 1080p replacement with info hash
+  `bb52d50d798d8b55994538cb73d9ae3cb22c943e` was grabbed through Radarr;
+- TorBox exposed the cached `1328822240`-byte torrent as remote ID `72413019`;
+- Downloadarr delivered both torrent files, reported `pausedUP`, and the live
+  verifier observed Radarr's import-and-cleanup contract after 154.9 seconds;
+- Radarr registered movie file ID 18 with the exact video size `1328716257`;
+- the Radarr queue, Downloadarr job, TorBox torrent, TorBox queue record, and
+  staging directory were all absent after cleanup; and
+- the imported library file remained on the host at exactly `1328716257`
+  bytes.
+
+This completes live Sonarr and Radarr coverage of the same automated verifier.
