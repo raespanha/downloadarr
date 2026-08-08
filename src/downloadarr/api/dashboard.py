@@ -74,7 +74,8 @@ async def jobs(request: Request) -> JSONResponse:
 
 
 @router.get("/ui/api/performance", dependencies=[Depends(require_auth)])
-async def performance(request: Request, range: str = "7d") -> JSONResponse:
+async def performance(request: Request, range: str = "7d", service: str = "all",
+                      indexer: str = "all") -> JSONResponse:
     now = datetime.now(timezone.utc)
     if range == "7d":
         since, bucket = now - timedelta(days=7), "day"
@@ -84,8 +85,22 @@ async def performance(request: Request, range: str = "7d") -> JSONResponse:
         since, bucket = None, "month"
     else:
         raise HTTPException(status_code=400, detail="range must be 7d, 30d, or all")
+    if len(service) > 32 or len(indexer) > 255:
+        raise HTTPException(status_code=400, detail="invalid performance filter")
     values = await request.app.state.job_service.transfer_history(since)
-    return JSONResponse(_performance_json(values, range, bucket))
+    failures = await request.app.state.job_service.failure_history(since)
+    available = {
+        "services": sorted({item.service for item in [*values, *failures]}),
+        "indexers": sorted({item.indexer for item in [*values, *failures]}),
+    }
+    if service != "all":
+        values = [item for item in values if item.service == service]
+        failures = [item for item in failures if item.service == service]
+    if indexer != "all":
+        values = [item for item in values if item.indexer == indexer]
+        failures = [item for item in failures if item.indexer == indexer]
+    return JSONResponse(_performance_json(
+        values, failures, range, bucket, service, indexer, available))
 
 
 @router.post("/ui/jobs/{info_hash}/remove", dependencies=[Depends(require_auth)])
@@ -119,6 +134,16 @@ async def save_settings(request: Request) -> Response:
         token = str(form.get("torbox_token", "")).strip()
         if token and token != "********":
             values["torbox"]["api_token"] = token
+        for name in ("sonarr", "radarr"):
+            if f"{name}_url" in form:
+                values["integrations"][name]["url"] = str(
+                    form.get(f"{name}_url", "")).strip()
+            if f"{name}_category" in form:
+                values["integrations"][name]["category"] = str(
+                    form.get(f"{name}_category", "")).strip()
+            api_key = str(form.get(f"{name}_api_key", "")).strip()
+            if api_key and api_key != "********":
+                values["integrations"][name]["api_key"] = api_key
         updated = Settings.model_validate(values)
         await request.app.state.settings_service.save(updated)
     except (OSError, TypeError, ValueError):
@@ -156,7 +181,9 @@ def _job_json(job: Job) -> dict:
     }
 
 
-def _performance_json(values, selected_range: str, bucket: str) -> dict:
+def _performance_json(values, failures, selected_range: str, bucket: str,
+                      selected_service: str, selected_indexer: str,
+                      available: dict) -> dict:
     groups = defaultdict(list)
     for value in values:
         completed = value.completed_at
@@ -164,8 +191,17 @@ def _performance_json(values, selected_range: str, bucket: str) -> dict:
                else completed.strftime("%Y-%m-%d"))
         groups[key].append(value)
 
+    failure_groups = defaultdict(list)
+    for value in failures:
+        occurred = value.occurred_at
+        key = (occurred.strftime("%Y-%m") if bucket == "month"
+               else occurred.strftime("%Y-%m-%d"))
+        failure_groups[key].append(value)
+
     timeline = []
-    for label, items in sorted(groups.items()):
+    for label in sorted(set(groups) | set(failure_groups)):
+        items = groups[label]
+        failed = failure_groups[label]
         elapsed = sum(item.elapsed for item in items)
         transferred = sum(item.transferred_bytes for item in items)
         timeline.append({
@@ -175,6 +211,8 @@ def _performance_json(values, selected_range: str, bucket: str) -> dict:
             "average_speed": int(transferred / elapsed) if elapsed else 0,
             "peak_speed": max((item.peak_speed for item in items), default=0),
             "retries": sum(item.retry_count for item in items),
+            "failures": len(failed),
+            "unresolved_failures": sum(item.resolved_at is None for item in failed),
         })
 
     total_elapsed = sum(value.elapsed for value in values)
@@ -183,6 +221,8 @@ def _performance_json(values, selected_range: str, bucket: str) -> dict:
         "info_hash": value.info_hash,
         "name": value.name,
         "category": value.category,
+        "service": value.service,
+        "indexer": value.indexer,
         "file": value.relative_path,
         "bytes": value.total_bytes,
         "transferred_bytes": value.transferred_bytes,
@@ -197,8 +237,25 @@ def _performance_json(values, selected_range: str, bucket: str) -> dict:
         "cdn_host": value.cdn_host,
         "completed_at": value.completed_at.isoformat(),
     } for value in reversed(values[-20:])]
+    recent_failures = [{
+        "info_hash": value.info_hash,
+        "name": value.name,
+        "category": value.category,
+        "service": value.service,
+        "indexer": value.indexer,
+        "stage": value.stage,
+        "code": value.error_code,
+        "message": value.error_message,
+        "transient": value.transient,
+        "attempt": value.attempt,
+        "bytes_downloaded": value.bytes_downloaded,
+        "occurred_at": value.occurred_at.isoformat(),
+        "resolved_at": value.resolved_at.isoformat() if value.resolved_at else None,
+    } for value in reversed(failures[-20:])]
     return {
         "range": selected_range,
+        "filters": {"service": selected_service, "indexer": selected_indexer},
+        "available": available,
         "summary": {
             "downloads": len({value.job_id for value in values}),
             "files": len(values),
@@ -208,10 +265,39 @@ def _performance_json(values, selected_range: str, bucket: str) -> dict:
             "retries": sum(value.retry_count for value in values),
             "range_transfers": sum(bool(value.used_ranges) for value in values),
             "resumed": sum(bool(value.resumed) for value in values),
+            "failures": len(failures),
+            "unresolved_failures": sum(value.resolved_at is None for value in failures),
+            "affected_downloads": len({value.job_id for value in failures}),
         },
         "timeline": timeline,
         "recent": recent,
+        "recent_failures": recent_failures,
+        "segments": {
+            "services": _segments(values, failures, "service"),
+            "indexers": _segments(values, failures, "indexer"),
+        },
     }
+
+
+def _segments(values, failures, field: str) -> list[dict]:
+    names = sorted({getattr(item, field) for item in [*values, *failures]})
+    result = []
+    for name in names:
+        completed = [item for item in values if getattr(item, field) == name]
+        failed = [item for item in failures if getattr(item, field) == name]
+        elapsed = sum(item.elapsed for item in completed)
+        transferred = sum(item.transferred_bytes for item in completed)
+        result.append({
+            "name": name,
+            "downloads": len({item.job_id for item in completed}),
+            "files": len(completed),
+            "bytes": sum(item.total_bytes for item in completed),
+            "average_speed": int(transferred / elapsed) if elapsed else 0,
+            "peak_speed": max((item.peak_speed for item in completed), default=0),
+            "failures": len(failed),
+            "unresolved_failures": sum(item.resolved_at is None for item in failed),
+        })
+    return result
 
 
 def _require_same_origin(request: Request) -> None:

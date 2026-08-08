@@ -5,13 +5,14 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from ..config import DownloadConfig
+from ..arr_metadata import SourceResolver
 from ..db.engine import Database
-from ..db.models import (Category, DeliveryFile, Job, JobState, ProviderJob,
-                         TransferHistory)
+from ..db.models import (Category, DeliveryFile, FailureEvent, Job, JobState,
+                         ProviderJob, TransferHistory)
 from ..downloader import Downloader
 from ..errors import DownloadError
 from ..magnets import MagnetInfo
@@ -27,7 +28,8 @@ class JobService:
                  poll_interval: float = 5.0, queued_poll_interval: float = 30.0,
                  max_backoff: float = 300.0, download_path: Path = Path("/downloads"),
                  download_connections: int = 4, download_transfer_mode: str = "auto",
-                 downloader: Downloader | None = None) -> None:
+                 downloader: Downloader | None = None,
+                 source_resolver: SourceResolver | None = None) -> None:
         self.database, self.provider = database, provider
         self.poll_interval, self.queued_poll_interval = poll_interval, queued_poll_interval
         self.max_backoff = max_backoff
@@ -35,6 +37,7 @@ class JobService:
         self._active_tasks: dict[str, asyncio.Task] = {}
         self._removing: set[str] = set()
         self._task_lock = asyncio.Lock()
+        self.source_resolver = source_resolver
         self.downloader = downloader or Downloader(DownloadConfig(
             connections=download_connections, transfer_mode=download_transfer_mode))
 
@@ -59,7 +62,9 @@ class JobService:
                     raise ValueError("category does not exist")
             job = Job(info_hash=info_hash, name=name, source_uri=source_uri,
                       source_kind=source_kind, source_data=source_data, category=category,
-                      state=JobState.SUBMITTED.value, next_poll_at=_now())
+                      state=JobState.SUBMITTED.value, next_poll_at=_now(),
+                      source_service=(self.source_resolver.service_for(category_name)
+                                      if self.source_resolver else "other"))
             job.provider_job = ProviderJob(provider="torbox")
             session.add(job)
             try:
@@ -124,6 +129,19 @@ class JobService:
         values.reverse()
         return values
 
+    async def failure_history(self, since: datetime | None = None,
+                              limit: int | None = None) -> list[FailureEvent]:
+        statement = select(FailureEvent)
+        if since is not None:
+            statement = statement.where(FailureEvent.occurred_at >= since)
+        statement = statement.order_by(FailureEvent.occurred_at.desc())
+        if limit is not None:
+            statement = statement.limit(limit)
+        async with self.database.session() as session:
+            values = list((await session.scalars(statement)).all())
+        values.reverse()
+        return values
+
     async def due_job_ids(self, limit: int = 100) -> list[str]:
         terminal = [JobState.COMPLETED.value, JobState.FAILED.value]
         statement = (select(Job.id).where(Job.state.not_in(terminal),
@@ -152,7 +170,9 @@ class JobService:
             job = await session.get(Job, job_id)
             if job is None or job.state in (JobState.COMPLETED.value, JobState.FAILED.value):
                 return
+            failure_stage = _failure_stage(job.state)
             try:
+                await self._enrich_source(job, session)
                 if job.provider_job.remote_id is not None:
                     if job.delivery_files:
                         job.state = JobState.DELIVERING.value
@@ -167,6 +187,10 @@ class JobService:
                     await self._submit(job)
                 job.poll_failures = 0
                 job.error_code = job.error_message = None
+                await session.execute(update(FailureEvent).where(
+                    FailureEvent.job_id == job.id,
+                    FailureEvent.resolved_at.is_(None),
+                ).values(resolved_at=_now()))
             except ProviderError as error:
                 job.poll_failures += 1
                 job.error_code, job.error_message = error.code, str(error)[:512]
@@ -178,17 +202,68 @@ class JobService:
                 else:
                     job.state = JobState.FAILED.value
                     job.next_poll_at = None
+                self._record_failure(session, job, failure_stage, error.code,
+                                     str(error), error.transient)
             except DownloadError as error:
                 job.poll_failures += 1
                 job.error_code, job.error_message = "DOWNLOAD_FAILED", str(error)[:512]
                 job.state = JobState.RETRY_WAIT.value
                 job.next_poll_at = _now() + timedelta(seconds=min(
                     self.poll_interval * (2 ** (job.poll_failures - 1)), self.max_backoff))
+                self._record_failure(session, job, failure_stage, "DOWNLOAD_FAILED",
+                                     str(error), True)
             except (OSError, ValueError) as error:
                 job.poll_failures += 1
                 job.error_code, job.error_message = "DELIVERY_FAILED", str(error)[:512]
                 job.state, job.next_poll_at = JobState.FAILED.value, None
+                self._record_failure(session, job, failure_stage, "DELIVERY_FAILED",
+                                     str(error), False)
             await session.commit()
+
+    async def _enrich_source(self, job: Job, session, force: bool = False) -> None:
+        if self.source_resolver is None or job.source_indexer is not None:
+            return
+        now = _now()
+        if (not force and job.source_metadata_checked_at is not None
+                and now - _aware(job.source_metadata_checked_at) < timedelta(seconds=15)):
+            return
+        metadata = await self.source_resolver.resolve(
+            job.category.name if job.category else None, job.info_hash)
+        job.source_service = metadata.service
+        job.source_metadata_checked_at = now
+        if metadata.indexer:
+            job.source_indexer = metadata.indexer
+            job.source_indexer_id = metadata.indexer_id
+            await session.execute(update(FailureEvent).where(
+                FailureEvent.job_id == job.id,
+                FailureEvent.indexer == "Unknown",
+            ).values(indexer=metadata.indexer))
+
+    def _record_failure(self, session, job: Job, stage: str, code: str,
+                        message: str, transient: bool) -> None:
+        safe_message = message[:512]
+        event = FailureEvent(
+            job_id=job.id,
+            info_hash=job.info_hash,
+            name=job.name or job.info_hash,
+            category=job.category.name if job.category else "",
+            service=job.source_service,
+            indexer=job.source_indexer or "Unknown",
+            stage=stage,
+            error_code=code[:64],
+            error_message=safe_message,
+            transient=transient,
+            attempt=job.poll_failures,
+            bytes_downloaded=sum(item.downloaded for item in job.delivery_files),
+            occurred_at=_now(),
+        )
+        session.add(event)
+        logger.warning(
+            "transfer_failed info_hash=%s service=%s indexer=%r stage=%s code=%s "
+            "attempt=%d transient=%s bytes=%d message=%r",
+            job.info_hash, event.service, event.indexer, event.stage, event.error_code,
+            event.attempt, event.transient, event.bytes_downloaded, safe_message,
+        )
 
     async def _submit(self, job: Job) -> None:
         if job.source_kind == "torrent":
@@ -252,6 +327,7 @@ class JobService:
         job.state, job.next_poll_at = JobState.DELIVERING.value, _now()
 
     async def _deliver(self, job: Job, session) -> None:
+        await self._enrich_source(job, session, force=True)
         base = Path(job.category.save_path) if job.category else self.download_path
         total = sum(item.size for item in job.delivery_files)
         for item in job.delivery_files:
@@ -299,6 +375,9 @@ class JobService:
                 provider=job.provider_job.provider,
                 remote_id=job.provider_job.remote_id,
                 status="completed",
+                service=job.source_service,
+                indexer=job.source_indexer or "Unknown",
+                indexer_id=job.source_indexer_id,
                 total_bytes=result.byte_count,
                 transferred_bytes=(result.session_byte_count
                                    if result.session_byte_count is not None
@@ -316,10 +395,12 @@ class JobService:
                 completed_at=_now(),
             ))
             logger.info(
-                "transfer_completed info_hash=%s file=%r bytes=%d transferred_bytes=%d "
+                "transfer_completed info_hash=%s service=%s indexer=%r file=%r "
+                "bytes=%d transferred_bytes=%d "
                 "elapsed=%.3f average_bps=%d peak_bps=%d connections=%d ranges=%s "
                 "range_requests=%d retries=%d resumed=%s cdn=%s",
-                job.info_hash, item.relative_path, result.byte_count,
+                job.info_hash, job.source_service, job.source_indexer or "Unknown",
+                item.relative_path, result.byte_count,
                 result.session_byte_count if result.session_byte_count is not None
                 else result.byte_count,
                 result.elapsed, int(result.average_speed), int(result.peak_speed),
@@ -376,6 +457,21 @@ class JobService:
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _aware(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
+def _failure_stage(state: str) -> str:
+    return {
+        JobState.SUBMITTED.value: "submission",
+        JobState.PROVIDER_QUEUED.value: "provider_queue",
+        JobState.PROVIDER_DOWNLOADING.value: "provider",
+        JobState.PROVIDER_READY.value: "delivery_setup",
+        JobState.DELIVERING.value: "delivery",
+        JobState.RETRY_WAIT.value: "retry",
+    }.get(state, "unknown")
 
 
 def _delivery_paths(torrent_name: str, files) -> list[str]:

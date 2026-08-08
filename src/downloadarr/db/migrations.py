@@ -90,5 +90,50 @@ CREATE TABLE transfer_history (
 );
 CREATE INDEX idx_transfer_history_completed_at ON transfer_history(completed_at);
 CREATE INDEX idx_transfer_history_info_hash ON transfer_history(info_hash);
+""",
+    5: """
+ALTER TABLE jobs ADD COLUMN source_service VARCHAR(32) NOT NULL DEFAULT 'other';
+ALTER TABLE jobs ADD COLUMN source_indexer VARCHAR(255);
+ALTER TABLE jobs ADD COLUMN source_indexer_id INTEGER;
+ALTER TABLE jobs ADD COLUMN source_metadata_checked_at DATETIME;
+ALTER TABLE transfer_history ADD COLUMN service VARCHAR(32) NOT NULL DEFAULT 'other';
+ALTER TABLE transfer_history ADD COLUMN indexer VARCHAR(255) NOT NULL DEFAULT 'Unknown';
+ALTER TABLE transfer_history ADD COLUMN indexer_id INTEGER;
+CREATE INDEX idx_transfer_history_completed_service
+ON transfer_history(completed_at, service);
+CREATE INDEX idx_transfer_history_completed_indexer
+ON transfer_history(completed_at, indexer);
+CREATE TABLE failure_events (
+    id VARCHAR(36) NOT NULL PRIMARY KEY,
+    job_id VARCHAR(36) NOT NULL,
+    info_hash VARCHAR(40) NOT NULL,
+    name TEXT NOT NULL,
+    category VARCHAR(255) NOT NULL,
+    service VARCHAR(32) NOT NULL,
+    indexer VARCHAR(255) NOT NULL,
+    stage VARCHAR(32) NOT NULL,
+    error_code VARCHAR(64) NOT NULL,
+    error_message TEXT NOT NULL,
+    transient INTEGER NOT NULL,
+    attempt INTEGER NOT NULL,
+    bytes_downloaded INTEGER NOT NULL,
+    occurred_at DATETIME NOT NULL,
+    resolved_at DATETIME
+);
+CREATE INDEX idx_failure_events_occurred_at ON failure_events(occurred_at);
+CREATE INDEX idx_failure_events_occurred_service
+ON failure_events(occurred_at, service);
+CREATE INDEX idx_failure_events_occurred_indexer
+ON failure_events(occurred_at, indexer);
+""",
+    6: """
+CREATE INDEX idx_transfer_history_service_completed
+ON transfer_history(service, completed_at);
+CREATE INDEX idx_transfer_history_indexer_completed
+ON transfer_history(indexer, completed_at);
+CREATE INDEX idx_failure_events_service_occurred
+ON failure_events(service, occurred_at);
+CREATE INDEX idx_failure_events_indexer_occurred
+ON failure_events(indexer, occurred_at);
 """
 }

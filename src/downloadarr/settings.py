@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 
 class DatabaseSettings(BaseModel):
@@ -77,6 +77,50 @@ class TorBoxSettings(BaseModel):
         return value
 
 
+class ArrInstanceSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    url: str = ""
+    api_key: SecretStr = Field(default=SecretStr(""), repr=False)
+    category: str
+
+    @field_validator("url", mode="before")
+    @classmethod
+    def normalized_url(cls, value: Any) -> str:
+        return str(value or "").strip().rstrip("/")
+
+    @field_validator("category")
+    @classmethod
+    def valid_category(cls, value: str) -> str:
+        value = value.strip()
+        if not value or len(value) > 255:
+            raise ValueError("Arr category must be between 1 and 255 characters")
+        return value
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.url and self.api_key.get_secret_value())
+
+
+class IntegrationsSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    sonarr: ArrInstanceSettings = Field(
+        default_factory=lambda: ArrInstanceSettings(category="tv-sonarr"))
+    radarr: ArrInstanceSettings = Field(
+        default_factory=lambda: ArrInstanceSettings(category="radarr"))
+
+    @model_validator(mode="before")
+    @classmethod
+    def category_defaults(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        result = dict(value)
+        for name, category in (("sonarr", "tv-sonarr"), ("radarr", "radarr")):
+            instance = dict(result.get(name) or {})
+            instance.setdefault("category", category)
+            result[name] = instance
+        return result
+
+
 class SchedulerSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
     provider_concurrency: int = 4
@@ -108,6 +152,7 @@ class Settings(BaseModel):
     download: DownloadSettings = Field(default_factory=DownloadSettings)
     qbittorrent: QBittorrentSettings = Field(default_factory=QBittorrentSettings)
     torbox: TorBoxSettings = Field(default_factory=TorBoxSettings)
+    integrations: IntegrationsSettings = Field(default_factory=IntegrationsSettings)
     scheduler: SchedulerSettings = Field(default_factory=SchedulerSettings)
 
     @field_validator("schema_version")
@@ -171,6 +216,10 @@ class Settings(BaseModel):
         data["qbittorrent"]["password"] = "********"
         data["qbittorrent"]["api_key"] = "********" if self.api_key else None
         data["torbox"]["api_token"] = "********" if self.torbox_api_token.get_secret_value() else ""
+        for name in ("sonarr", "radarr"):
+            instance = getattr(self.integrations, name)
+            data["integrations"][name]["api_key"] = (
+                "********" if instance.api_key.get_secret_value() else "")
         return data
 
     def storage_dict(self) -> dict[str, Any]:
@@ -180,6 +229,9 @@ class Settings(BaseModel):
         data["qbittorrent"]["api_key"] = (self.api_key.get_secret_value()
                                                 if self.api_key else None)
         data["torbox"]["api_token"] = self.torbox_api_token.get_secret_value()
+        for name in ("sonarr", "radarr"):
+            instance = getattr(self.integrations, name)
+            data["integrations"][name]["api_key"] = instance.api_key.get_secret_value()
         return data
 
 
@@ -195,6 +247,12 @@ ENVIRONMENT_OVERRIDES: dict[str, tuple[str, ...]] = {
     "TORBOX_API_TOKEN": ("torbox", "api_token"),
     "TORBOX_API_BASE": ("torbox", "api_base"),
     "TORBOX_REQUEST_TIMEOUT": ("torbox", "request_timeout"),
+    "DOWNLOADARR_SONARR_URL": ("integrations", "sonarr", "url"),
+    "DOWNLOADARR_SONARR_API_KEY": ("integrations", "sonarr", "api_key"),
+    "DOWNLOADARR_SONARR_CATEGORY": ("integrations", "sonarr", "category"),
+    "DOWNLOADARR_RADARR_URL": ("integrations", "radarr", "url"),
+    "DOWNLOADARR_RADARR_API_KEY": ("integrations", "radarr", "api_key"),
+    "DOWNLOADARR_RADARR_CATEGORY": ("integrations", "radarr", "category"),
     "DOWNLOADARR_PROVIDER_CONCURRENCY": ("scheduler", "provider_concurrency"),
     "DOWNLOADARR_POLL_INTERVAL": ("scheduler", "poll_interval"),
     "DOWNLOADARR_QUEUED_POLL_INTERVAL": ("scheduler", "queued_poll_interval"),
@@ -271,7 +329,8 @@ def _apply_environment(values: dict[str, Any]) -> None:
 
 
 def _migrate_flat_settings(raw: dict[str, Any]) -> dict[str, Any]:
-    if any(key in raw for key in ("database", "download", "qbittorrent", "torbox", "scheduler")):
+    if any(key in raw for key in ("database", "download", "qbittorrent", "torbox",
+                                  "integrations", "scheduler")):
         return raw
     mapping = {
         "database_url": ("database", "url"),

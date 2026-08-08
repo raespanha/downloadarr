@@ -27,6 +27,9 @@
     .performance { margin-top:28px; padding:20px; border:1px solid #263443; border-radius:12px; background:#111923 }
     .section-head { display:flex; justify-content:space-between; gap:16px; align-items:center; margin-bottom:18px }
     .section-head h2 { margin:0; font-size:19px } .section-head p { margin:4px 0 0; color:#8497aa; font-size:13px }
+    .performance-controls { display:flex; flex-wrap:wrap; gap:8px; align-items:flex-end }
+    .performance-controls label { min-width:145px }
+    .performance-controls select { margin-top:3px; padding:7px 30px 7px 9px }
     .range-picker { display:flex; gap:6px; padding:4px; border-radius:10px; background:#0b121a }
     .range-picker button { padding:7px 10px; color:#91a2b5; background:transparent }
     .range-picker button.active { color:#062319; background:#36d399 }
@@ -37,10 +40,17 @@
     .legend { display:flex; gap:18px; margin:12px 0 0; color:#91a2b5; font-size:12px }
     .legend i { display:inline-block; width:18px; height:3px; margin:0 6px 3px 0; border-radius:4px; background:#24b9ff }
     .legend .peak { background:#36d399 }
+    .legend .failures { height:8px; background:#ff6174 }
+    .failure-count { color:#ff8c9a }
+    .segments { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:18px }
+    .segment-card { padding:14px; border:1px solid #223140; border-radius:10px; background:#0d151e }
+    .segment-card h3 { margin:0 0 10px; font-size:14px }
+    .segment-list { display:grid; gap:8px }
+    .segment-row { display:grid; grid-template-columns:minmax(110px,1fr) repeat(3,auto); gap:12px; color:#aebdca; font-size:12px }
     .history { margin-top:22px; overflow-x:auto } .history h3 { margin:0 0 10px; font-size:15px }
     table { width:100%; border-collapse:collapse; font-size:13px } th,td { padding:10px 8px; border-bottom:1px solid #223140; text-align:left; white-space:nowrap }
     th { color:#8497aa; font-size:11px; letter-spacing:.06em; text-transform:uppercase } td:first-child { max-width:420px; overflow:hidden; text-overflow:ellipsis }
-    @media(max-width:700px){body{overflow-x:hidden}header{gap:10px;padding:16px 20px}header h1{font-size:21px}.toolbar #updated{display:none}.summary,.performance-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.settings{grid-template-columns:1fr}.wide{grid-column:auto}.job-head,.job-foot,.section-head{align-items:stretch;flex-direction:column}.range-picker{align-self:flex-start}.card{min-width:0}.job-actions{align-self:flex-end}}
+    @media(max-width:700px){body{overflow-x:hidden}header{gap:10px;padding:16px 20px}header h1{font-size:21px}.toolbar #updated{display:none}.summary,.performance-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.settings,.segments{grid-template-columns:1fr}.wide{grid-column:auto}.job-head,.job-foot,.section-head{align-items:stretch;flex-direction:column}.range-picker{align-self:flex-start}.card{min-width:0}.job-actions{align-self:flex-end}}
   </style>
 </head>
 <body>
@@ -58,10 +68,14 @@
   <section class="performance" aria-labelledby="performance-title">
     <div class="section-head">
       <div><h2 id="performance-title">Transfer performance</h2><p>Historical CDN delivery speed retained after Arr imports and cleanup.</p></div>
-      <div class="range-picker" role="group" aria-label="Performance period">
-        <button type="button" data-range="7d" class="active">7 days</button>
-        <button type="button" data-range="30d">30 days</button>
-        <button type="button" data-range="all">All time</button>
+      <div class="performance-controls">
+        <label>Service<select id="service-filter"><option value="all">All services</option></select></label>
+        <label>Indexer<select id="indexer-filter"><option value="all">All indexers</option></select></label>
+        <div class="range-picker" role="group" aria-label="Performance period">
+          <button type="button" data-range="7d" class="active">7 days</button>
+          <button type="button" data-range="30d">30 days</button>
+          <button type="button" data-range="all">All time</button>
+        </div>
       </div>
     </div>
     <div class="performance-summary">
@@ -69,10 +83,14 @@
       <div class="metric"><span>Peak</span><strong id="history-peak">0 B/s</strong></div>
       <div class="metric"><span>Delivered</span><strong id="history-bytes">0 B</strong></div>
       <div class="metric"><span>Retries</span><strong id="history-retries">0</strong></div>
+      <div class="metric"><span>Failures</span><strong class="failure-count" id="history-failures">0</strong></div>
+      <div class="metric"><span>Unresolved</span><strong class="failure-count" id="history-unresolved">0</strong></div>
     </div>
     <div class="chart-wrap"><canvas id="performance-chart" role="img" aria-label="Average and peak transfer speeds over time"></canvas></div>
-    <div class="legend"><span><i></i>Average speed</span><span><i class="peak"></i>Peak speed</span></div>
-    <div class="history"><h3>Recent transfers</h3><table><thead><tr><th>Download</th><th>Completed</th><th>Size</th><th>Average</th><th>Peak</th><th>Connections</th><th>Retries</th></tr></thead><tbody id="history-rows"></tbody></table></div>
+    <div class="legend"><span><i></i>Average speed</span><span><i class="peak"></i>Peak speed</span><span><i class="failures"></i>Failures</span></div>
+    <div class="segments"><div class="segment-card"><h3>By service</h3><div id="service-segments" class="segment-list"></div></div><div class="segment-card"><h3>By indexer</h3><div id="indexer-segments" class="segment-list"></div></div></div>
+    <div class="history"><h3>Recent failures</h3><table><thead><tr><th>Download</th><th>Service</th><th>Indexer</th><th>Stage</th><th>Error</th><th>When</th><th>Status</th></tr></thead><tbody id="failure-rows"></tbody></table></div>
+    <div class="history"><h3>Recent transfers</h3><table><thead><tr><th>Download</th><th>Service</th><th>Indexer</th><th>Completed</th><th>Size</th><th>Average</th><th>Peak</th><th>Connections</th><th>Retries</th></tr></thead><tbody id="history-rows"></tbody></table></div>
   </section>
   <details>
     <summary>Settings</summary>
@@ -82,6 +100,12 @@
       <label>Connections<input name="connections" type="number" min="1" max="256" value="{{ settings.download.connections }}" required></label>
       <label>Provider connection ceiling<input name="provider_max_connections" type="number" min="1" max="256" value="{{ settings.download.provider_max_connections }}" required></label>
       <label class="wide">Default download path<input name="download_path" value="{{ settings.download.path }}" required></label>
+      <label>Sonarr URL<input name="sonarr_url" type="url" value="{{ settings.integrations.sonarr.url }}" placeholder="http://sonarr:8989"></label>
+      <label>Sonarr category<input name="sonarr_category" value="{{ settings.integrations.sonarr.category }}" required></label>
+      <label>Sonarr API key<input name="sonarr_api_key" type="password" value="" placeholder="{% if settings.integrations.sonarr.api_key %}Configured — leave blank to keep{% else %}Not configured{% endif %}" autocomplete="new-password"></label>
+      <label>Radarr URL<input name="radarr_url" type="url" value="{{ settings.integrations.radarr.url }}" placeholder="http://radarr:7878"></label>
+      <label>Radarr category<input name="radarr_category" value="{{ settings.integrations.radarr.category }}" required></label>
+      <label>Radarr API key<input name="radarr_api_key" type="password" value="" placeholder="{% if settings.integrations.radarr.api_key %}Configured — leave blank to keep{% else %}Not configured{% endif %}" autocomplete="new-password"></label>
       <label class="wide">Categories (JSON)<textarea name="categories" spellcheck="false" required>{{ categories_json }}</textarea></label>
       <div class="wide"><button class="primary" type="submit">Save settings</button> <small>Environment-managed fields: {{ managed_fields|join(', ') or 'none' }}</small></div>
     </form>
@@ -105,7 +129,7 @@ function render(values){
   document.querySelector('#updated').textContent='Updated '+new Date().toLocaleTimeString();
 }
 async function refresh(){try{const response=await fetch('/ui/api/jobs');if(response.status===403){location='/ui/login';return}render(await response.json())}catch(e){document.querySelector('#updated').textContent='Connection lost'}}
-let selectedRange='7d',chartValues=[];
+let selectedRange='7d',selectedService='all',selectedIndexer='all',chartValues=[];
 function drawChart(values){
   chartValues=values;const canvas=document.querySelector('#performance-chart'),ctx=canvas.getContext('2d'),width=canvas.clientWidth,height=canvas.clientHeight,dpr=window.devicePixelRatio||1;
   canvas.width=Math.max(1,Math.floor(width*dpr));canvas.height=Math.max(1,Math.floor(height*dpr));ctx.scale(dpr,dpr);ctx.clearRect(0,0,width,height);
@@ -116,14 +140,20 @@ function drawChart(values){
   const x=i=>pad.l+(values.length===1?w/2:w*i/(values.length-1)),y=n=>pad.t+h-(n/max*h);
   function line(field,color){ctx.strokeStyle=color;ctx.fillStyle=color;ctx.lineWidth=2;ctx.beginPath();values.forEach((v,i)=>{const px=x(i),py=y(v[field]);i?ctx.lineTo(px,py):ctx.moveTo(px,py)});ctx.stroke();values.forEach((v,i)=>{ctx.beginPath();ctx.arc(x(i),y(v[field]),3,0,Math.PI*2);ctx.fill()})}
   line('average_speed','#24b9ff');line('peak_speed','#36d399');ctx.fillStyle='#71869a';ctx.textAlign='center';const every=Math.max(1,Math.ceil(values.length/6));values.forEach((v,i)=>{if(i%every===0||i===values.length-1)ctx.fillText(v.label,x(i),height-10)});ctx.textAlign='left';
+  const maxFailures=Math.max(1,...values.map(v=>v.failures));values.forEach((v,i)=>{if(!v.failures)return;const barHeight=Math.max(3,v.failures/maxFailures*h*.25);ctx.fillStyle='#ff6174';ctx.fillRect(x(i)-3,pad.t+h-barHeight,6,barHeight)});
 }
+function updateFilter(id,values,selected,allLabel){const select=document.querySelector(id),known=new Set(values);select.replaceChildren();const all=document.createElement('option');all.value='all';all.textContent=allLabel;select.append(all);for(const value of values){const option=document.createElement('option');option.value=value;option.textContent=value;select.append(option)}select.value=known.has(selected)?selected:'all';return select.value}
+function renderSegments(id,values){const node=document.querySelector(id);node.replaceChildren();if(!values.length){node.textContent='No data in this period.';return}for(const item of values){const row=document.createElement('div');row.className='segment-row';for(const value of [item.name,fmtBytes(item.average_speed)+'/s',item.files+' files',item.failures+' failures']){const span=document.createElement('span');span.textContent=value;row.append(span)}node.append(row)}}
 function renderHistory(data){
-  const s=data.summary;document.querySelector('#completed-count').textContent=s.downloads;document.querySelector('#history-average').textContent=fmtBytes(s.average_speed)+'/s';document.querySelector('#history-peak').textContent=fmtBytes(s.peak_speed)+'/s';document.querySelector('#history-bytes').textContent=fmtBytes(s.bytes);document.querySelector('#history-retries').textContent=s.retries;drawChart(data.timeline);
-  const body=document.querySelector('#history-rows');body.replaceChildren();if(!data.recent.length){const row=body.insertRow();const cell=row.insertCell();cell.colSpan=7;cell.textContent='No completed transfers in this period.';return}
-  for(const item of data.recent){const row=body.insertRow();const values=[item.name,new Date(item.completed_at).toLocaleString(),fmtBytes(item.bytes),fmtBytes(item.average_speed)+'/s',fmtBytes(item.peak_speed)+'/s',item.connections,item.retries];values.forEach(value=>{const cell=row.insertCell();cell.textContent=value});row.title=item.file}
+  const s=data.summary;document.querySelector('#completed-count').textContent=s.downloads;document.querySelector('#history-average').textContent=fmtBytes(s.average_speed)+'/s';document.querySelector('#history-peak').textContent=fmtBytes(s.peak_speed)+'/s';document.querySelector('#history-bytes').textContent=fmtBytes(s.bytes);document.querySelector('#history-retries').textContent=s.retries;document.querySelector('#history-failures').textContent=s.failures;document.querySelector('#history-unresolved').textContent=s.unresolved_failures;drawChart(data.timeline);
+  selectedService=updateFilter('#service-filter',data.available.services,selectedService,'All services');selectedIndexer=updateFilter('#indexer-filter',data.available.indexers,selectedIndexer,'All indexers');renderSegments('#service-segments',data.segments.services);renderSegments('#indexer-segments',data.segments.indexers);
+  const failures=document.querySelector('#failure-rows');failures.replaceChildren();if(!data.recent_failures.length){const row=failures.insertRow();const cell=row.insertCell();cell.colSpan=7;cell.textContent='No failures in this period.'}else for(const item of data.recent_failures){const row=failures.insertRow();const status=item.resolved_at?'Recovered '+new Date(item.resolved_at).toLocaleString():'Open';const values=[item.name,item.service,item.indexer,item.stage,item.code+': '+item.message,new Date(item.occurred_at).toLocaleString(),status];values.forEach(value=>{const cell=row.insertCell();cell.textContent=value});row.title=item.info_hash}
+  const body=document.querySelector('#history-rows');body.replaceChildren();if(!data.recent.length){const row=body.insertRow();const cell=row.insertCell();cell.colSpan=9;cell.textContent='No completed transfers in this period.';return}
+  for(const item of data.recent){const row=body.insertRow();const values=[item.name,item.service,item.indexer,new Date(item.completed_at).toLocaleString(),fmtBytes(item.bytes),fmtBytes(item.average_speed)+'/s',fmtBytes(item.peak_speed)+'/s',item.connections,item.retries];values.forEach(value=>{const cell=row.insertCell();cell.textContent=value});row.title=item.file}
 }
-async function loadPerformance(range=selectedRange){selectedRange=range;document.querySelectorAll('[data-range]').forEach(b=>b.classList.toggle('active',b.dataset.range===range));try{const response=await fetch('/ui/api/performance?range='+encodeURIComponent(range));if(response.status===403){location='/ui/login';return}if(!response.ok)throw new Error('performance request failed');renderHistory(await response.json())}catch(e){document.querySelector('#history-rows').innerHTML='<tr><td colspan="7">Performance history is unavailable.</td></tr>'}}
+async function loadPerformance(range=selectedRange){selectedRange=range;document.querySelectorAll('[data-range]').forEach(b=>b.classList.toggle('active',b.dataset.range===range));try{const query=new URLSearchParams({range,service:selectedService,indexer:selectedIndexer});const response=await fetch('/ui/api/performance?'+query);if(response.status===403){location='/ui/login';return}if(!response.ok)throw new Error('performance request failed');renderHistory(await response.json())}catch(e){document.querySelector('#history-rows').innerHTML='<tr><td colspan="9">Performance history is unavailable.</td></tr>'}}
 document.querySelectorAll('[data-range]').forEach(button=>button.addEventListener('click',()=>loadPerformance(button.dataset.range)));window.addEventListener('resize',()=>drawChart(chartValues));
+document.querySelector('#service-filter').addEventListener('change',event=>{selectedService=event.target.value;loadPerformance()});document.querySelector('#indexer-filter').addEventListener('change',event=>{selectedIndexer=event.target.value;loadPerformance()});
 refresh();loadPerformance();setInterval(refresh,2000);setInterval(()=>loadPerformance(),30000);
 </script>
 </body></html>

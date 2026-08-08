@@ -64,6 +64,10 @@ Backing up `/config` preserves both settings and the SQLite database.
     "api_base": "https://api.torbox.app/v1/api",
     "request_timeout": 30
   },
+  "integrations": {
+    "sonarr": {"url": "http://sonarr:8989", "api_key": "secret", "category": "tv-sonarr"},
+    "radarr": {"url": "http://radarr:7878", "api_key": "secret", "category": "radarr"}
+  },
   "scheduler": {
     "provider_concurrency": 4,
     "poll_interval": 5,
@@ -130,6 +134,14 @@ version changes from the UI.
 | `queued_poll_interval` | number | Positive seconds for queued jobs |
 | `max_poll_backoff` | number | Positive retry ceiling in seconds |
 
+### Sonarr and Radarr metadata enrichment
+
+Each Arr integration has a base `url`, secret `api_key`, and the qBittorrent
+`category` assigned to that service. Downloadarr uses these read-only API
+credentials to find the grab history record matching a torrent info hash and
+attribute performance and failures to the exact indexer. Either integration
+may be left disabled by keeping its URL or API key empty.
+
 ## Environment overrides
 
 Environment variables take precedence over the JSON document:
@@ -147,6 +159,12 @@ Environment variables take precedence over the JSON document:
 | `TORBOX_API_TOKEN` | `torbox.api_token` |
 | `TORBOX_API_BASE` | `torbox.api_base` |
 | `TORBOX_REQUEST_TIMEOUT` | `torbox.request_timeout` |
+| `DOWNLOADARR_SONARR_URL` | `integrations.sonarr.url` |
+| `DOWNLOADARR_SONARR_API_KEY` | `integrations.sonarr.api_key` |
+| `DOWNLOADARR_SONARR_CATEGORY` | `integrations.sonarr.category` |
+| `DOWNLOADARR_RADARR_URL` | `integrations.radarr.url` |
+| `DOWNLOADARR_RADARR_API_KEY` | `integrations.radarr.api_key` |
+| `DOWNLOADARR_RADARR_CATEGORY` | `integrations.radarr.category` |
 | `DOWNLOADARR_PROVIDER_CONCURRENCY` | `scheduler.provider_concurrency` |
 | `DOWNLOADARR_POLL_INTERVAL` | `scheduler.poll_interval` |
 | `DOWNLOADARR_QUEUED_POLL_INTERVAL` | `scheduler.queued_poll_interval` |

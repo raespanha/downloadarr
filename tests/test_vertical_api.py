@@ -8,6 +8,7 @@ import pytest
 from pydantic import SecretStr
 
 from downloadarr.api import create_app
+from downloadarr.arr_metadata import SourceMetadata
 from downloadarr.db.models import JobState
 from downloadarr.providers.base import (ProviderFile, ProviderQueuedTorrent, ProviderSubmission,
                                         ProviderError, ProviderTorrent)
@@ -86,6 +87,20 @@ class FakeDownloader:
                               False, True)
 
 
+class FakeSourceResolver:
+    def __init__(self, indexer="The Pirate Bay (Prowlarr)", indexer_id=7):
+        self.indexer, self.indexer_id, self.closed = indexer, indexer_id, False
+
+    def service_for(self, category):
+        return {"tv-sonarr": "sonarr", "radarr": "radarr"}.get(category, "other")
+
+    async def resolve(self, category, info_hash):
+        return SourceMetadata(self.service_for(category), self.indexer, self.indexer_id)
+
+    async def close(self):
+        self.closed = True
+
+
 def settings(tmp_path: Path) -> Settings:
     return Settings.model_validate({
         "database": {"url": f"sqlite+aiosqlite:///{tmp_path / 'jobs.db'}"},
@@ -97,10 +112,11 @@ def settings(tmp_path: Path) -> Settings:
 
 
 @asynccontextmanager
-async def client_for(tmp_path, provider=None, downloader=None):
+async def client_for(tmp_path, provider=None, downloader=None, source_resolver=None):
     fake = provider or FakeProvider()
     app = create_app(settings(tmp_path), fake, start_poller=False,
-                     downloader=downloader or FakeDownloader())
+                     downloader=downloader or FakeDownloader(),
+                     source_resolver=source_resolver)
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
                                      base_url="http://test") as client:
@@ -346,6 +362,8 @@ async def test_performance_history_survives_arr_cleanup(tmp_path):
             "downloads": 1, "files": 1, "bytes": 5,
             "average_speed": 200, "peak_speed": 350, "retries": 1,
             "range_transfers": 1, "resumed": 0,
+            "failures": 0, "unresolved_failures": 0,
+            "affected_downloads": 0,
         }
         assert values["timeline"][0]["average_speed"] == 200
         assert values["recent"][0]["connections"] == 4
@@ -358,6 +376,30 @@ async def test_performance_history_survives_arr_cleanup(tmp_path):
         retained = (await client.get("/ui/api/performance?range=all")).json()
         assert retained["summary"]["downloads"] == 1
         assert retained["recent"][0]["info_hash"] == HASH
+
+
+async def test_performance_is_attributed_and_filterable_by_arr_source(tmp_path):
+    provider, resolver = FakeProvider(), FakeSourceResolver()
+    provider.torrent = ProviderTorrent(42, HASH, "Test.Release", "cached", 5,
+                                       1, 0, 0, True, True)
+    async with client_for(tmp_path, provider, source_resolver=resolver) as (client, app, _):
+        await login(client)
+        await client.post("/api/v2/torrents/createCategory",
+                          data={"category": "radarr", "savePath": str(tmp_path / "movies")})
+        await client.post("/api/v2/torrents/add",
+                          data={"urls": MAGNET, "category": "radarr"})
+        job = (await app.state.job_service.jobs())[0]
+        for _ in range(4):
+            await app.state.job_service.process(job.id)
+
+        data = (await client.get(
+            "/ui/api/performance?range=7d&service=radarr&indexer=The%20Pirate%20Bay%20%28Prowlarr%29"
+        )).json()
+        assert data["summary"]["downloads"] == 1
+        assert data["recent"][0]["service"] == "radarr"
+        assert data["recent"][0]["indexer"] == "The Pirate Bay (Prowlarr)"
+        assert data["segments"]["services"][0]["name"] == "radarr"
+    assert resolver.closed
 
 
 async def test_delete_endpoint_optionally_removes_delivered_files(tmp_path):
@@ -608,18 +650,53 @@ async def test_transient_and_terminal_provider_failures(tmp_path):
         provider.create_magnet = terminal
         await app.state.job_service.process(job.id)
         assert (await app.state.job_service.job(HASH)).state == JobState.FAILED.value
+        data = (await client.get("/ui/api/performance?range=7d")).json()
+        assert data["summary"]["failures"] == 2
+        assert data["summary"]["unresolved_failures"] == 2
+        assert data["recent_failures"][0]["code"] == "AUTHENTICATION_FAILED"
+        assert data["recent_failures"][0]["stage"] == "retry"
+        await client.post("/api/v2/torrents/delete",
+                          data={"hashes": HASH, "deleteFiles": "false"})
+        retained = (await client.get("/ui/api/performance?range=all")).json()
+        assert retained["summary"]["failures"] == 2
+
+
+async def test_transient_failure_is_marked_recovered_after_success(tmp_path):
+    provider = FakeProvider()
+    attempts = 0
+
+    async def fail_once(magnet):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ProviderError("RATE_LIMITED", "temporarily unavailable", transient=True)
+        return ProviderSubmission(remote_id=42)
+
+    provider.create_magnet = fail_once
+    async with client_for(tmp_path, provider) as (client, app, _):
+        await login(client)
+        await client.post("/api/v2/torrents/add", data={"urls": MAGNET})
+        job = (await app.state.job_service.jobs())[0]
+        await app.state.job_service.process(job.id)
+        assert (await app.state.job_service.failure_history())[0].resolved_at is None
+        await app.state.job_service.process(job.id)
+        failure = (await app.state.job_service.failure_history())[0]
+        assert failure.resolved_at is not None
 
 
 def test_settings_redact_secrets(tmp_path):
     values = settings(tmp_path).model_dump()
     values["torbox"]["api_token"] = "top-secret"
     values["qbittorrent"]["api_key"] = "api-secret"
+    values["integrations"]["sonarr"]["api_key"] = "sonarr-secret"
     configured = Settings.model_validate(values)
     rendered = repr(configured)
-    assert "top-secret" not in rendered and "api-secret" not in rendered
+    assert all(secret not in rendered for secret in
+               ("top-secret", "api-secret", "sonarr-secret"))
     masked = configured.masked()
     assert masked["torbox"]["api_token"] == "********"
     assert masked["qbittorrent"]["password"] == "********"
+    assert masked["integrations"]["sonarr"]["api_key"] == "********"
 
 
 def test_json_settings_with_environment_override(tmp_path, monkeypatch):
@@ -627,10 +704,12 @@ def test_json_settings_with_environment_override(tmp_path, monkeypatch):
     path.write_text('{"username":"from-file","torbox_api_token":"file-secret",'
                     '"provider_concurrency":2}', encoding="utf-8")
     monkeypatch.setenv("DOWNLOADARR_USERNAME", "from-environment")
+    monkeypatch.setenv("DOWNLOADARR_RADARR_API_KEY", "radarr-environment-secret")
     configured = load_settings(path)
     assert configured.username == "from-environment"
     assert configured.provider_concurrency == 2
     assert configured.torbox_api_token.get_secret_value() == "file-secret"
+    assert configured.integrations.radarr.api_key.get_secret_value() == "radarr-environment-secret"
 
 
 def test_invalid_json_settings_are_rejected(tmp_path):

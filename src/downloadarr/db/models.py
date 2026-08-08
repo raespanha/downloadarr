@@ -55,6 +55,10 @@ class Job(Base):
     next_poll_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     poll_failures: Mapped[int] = mapped_column(Integer, default=0)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    source_service: Mapped[str] = mapped_column(String(32), default="other")
+    source_indexer: Mapped[str | None] = mapped_column(String(255))
+    source_indexer_id: Mapped[int | None] = mapped_column(Integer)
+    source_metadata_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     category: Mapped[Category | None] = relationship(lazy="joined")
     provider_job: Mapped["ProviderJob | None"] = relationship(back_populates="job", lazy="joined",
                                                                cascade="all, delete-orphan")
@@ -108,6 +112,9 @@ class TransferHistory(Base):
     provider: Mapped[str] = mapped_column(String(32), default="torbox")
     remote_id: Mapped[int | None] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(32), default="completed")
+    service: Mapped[str] = mapped_column(String(32), default="other")
+    indexer: Mapped[str] = mapped_column(String(255), default="Unknown")
+    indexer_id: Mapped[int | None] = mapped_column(Integer)
     total_bytes: Mapped[int] = mapped_column(Integer)
     transferred_bytes: Mapped[int] = mapped_column(Integer)
     elapsed: Mapped[float] = mapped_column(Float)
@@ -121,3 +128,24 @@ class TransferHistory(Base):
     cdn_host: Mapped[str | None] = mapped_column(String(255))
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class FailureEvent(Base):
+    __tablename__ = "failure_events"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True,
+                                    default=lambda: str(uuid.uuid4()))
+    # Like transfer history, failures intentionally outlive operational jobs.
+    job_id: Mapped[str] = mapped_column(String(36))
+    info_hash: Mapped[str] = mapped_column(String(40))
+    name: Mapped[str] = mapped_column(Text)
+    category: Mapped[str] = mapped_column(String(255), default="")
+    service: Mapped[str] = mapped_column(String(32), default="other")
+    indexer: Mapped[str] = mapped_column(String(255), default="Unknown")
+    stage: Mapped[str] = mapped_column(String(32))
+    error_code: Mapped[str] = mapped_column(String(64))
+    error_message: Mapped[str] = mapped_column(Text)
+    transient: Mapped[bool] = mapped_column(Integer)
+    attempt: Mapped[int] = mapped_column(Integer)
+    bytes_downloaded: Mapped[int] = mapped_column(Integer, default=0)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

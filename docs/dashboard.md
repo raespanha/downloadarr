@@ -10,9 +10,11 @@ The first dashboard slice provides:
 - durable 7-day, 30-day, and all-time performance timelines with weighted
   average speed, smoothed peak speed, delivered bytes, retries, and recent
   transfer details;
+- service and indexer filters, comparison summaries, and persistent failure
+  events with open/recovered state;
 - explicit TorBox queue/provider/local-delivery phase labels;
 - removal controls that also clean up the corresponding TorBox object;
-- masked TorBox credentials; and
+- masked TorBox and Arr credentials; and
 - atomically saved download settings and category paths.
 
 The page polls the local API every two seconds. Job names and provider errors
@@ -22,8 +24,9 @@ handling.
 
 Settings are validated and saved to the configured JSON file with the existing
 timestamped-backup behavior. They take effect after Downloadarr restarts. An
-empty token field preserves the stored token, and the current secret is never
-rendered into the page.
+empty token or API-key field preserves the stored secret, and current secrets
+are never rendered into the page. Optional Sonarr/Radarr URLs and API keys add
+exact indexer attribution through read-only grab-history lookups.
 
 Environment-managed fields are listed in the settings panel. A saved file
 cannot override those fields while their environment variables remain set.

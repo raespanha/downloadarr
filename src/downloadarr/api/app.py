@@ -4,6 +4,7 @@ import logging
 import uvicorn
 from fastapi import FastAPI
 
+from ..arr_metadata import ArrMetadataResolver, SourceResolver
 from ..db.engine import Database
 from ..downloader import Downloader
 from ..jobs import JobPoller, JobService
@@ -17,7 +18,8 @@ from .qbittorrent import router
 
 def create_app(settings: Settings | None = None, provider: TorrentProvider | None = None,
                *, start_poller: bool = True, downloader: Downloader | None = None,
-               settings_service: SettingsService | None = None) -> FastAPI:
+               settings_service: SettingsService | None = None,
+               source_resolver: SourceResolver | None = None) -> FastAPI:
     configured = settings or load_settings()
     actual_settings_service = settings_service or SettingsService()
 
@@ -31,6 +33,7 @@ def create_app(settings: Settings | None = None, provider: TorrentProvider | Non
         actual_provider = provider or TorBoxProvider(
             configured.torbox_api_token.get_secret_value(), configured.torbox_api_base,
             configured.torbox_request_timeout)
+        actual_resolver = source_resolver or ArrMetadataResolver(configured.integrations)
         job_service = JobService(database, actual_provider, poll_interval=configured.poll_interval,
                                  queued_poll_interval=configured.queued_poll_interval,
                                  max_backoff=configured.max_poll_backoff,
@@ -38,7 +41,7 @@ def create_app(settings: Settings | None = None, provider: TorrentProvider | Non
                                  download_connections=min(configured.download.connections,
                                                           configured.download.provider_max_connections),
                                  download_transfer_mode=configured.download.transfer_mode,
-                                 downloader=downloader)
+                                 downloader=downloader, source_resolver=actual_resolver)
         for name, path in configured.download.categories.items():
             await job_service.ensure_category(name, path)
         poller = JobPoller(job_service, configured.provider_concurrency)
@@ -46,6 +49,7 @@ def create_app(settings: Settings | None = None, provider: TorrentProvider | Non
         app.state.settings_service = actual_settings_service
         app.state.database = database
         app.state.provider = actual_provider
+        app.state.source_resolver = actual_resolver
         app.state.job_service = job_service
         app.state.auth_sessions = SessionStore()
         app.state.poller = poller
@@ -57,6 +61,7 @@ def create_app(settings: Settings | None = None, provider: TorrentProvider | Non
             if start_poller:
                 await poller.stop()
             await actual_provider.close()
+            await actual_resolver.close()
             await database.close()
 
     app = FastAPI(title="Downloadarr", version="0.1.0", lifespan=lifespan)

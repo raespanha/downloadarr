@@ -25,6 +25,18 @@
     "api_base": "https://api.torbox.app/v1/api",
     "request_timeout": 30
   },
+  "integrations": {
+    "sonarr": {
+      "url": "http://sonarr:8989",
+      "api_key": "replace-with-your-sonarr-api-key",
+      "category": "tv-sonarr"
+    },
+    "radarr": {
+      "url": "http://radarr:7878",
+      "api_key": "replace-with-your-radarr-api-key",
+      "category": "radarr"
+    }
+  },
   "scheduler": {
     "provider_concurrency": 4,
     "poll_interval": 5,
