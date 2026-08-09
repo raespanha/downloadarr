@@ -110,3 +110,42 @@ The equivalent destructive replacement cycle also passed for Radarr using
   bytes.
 
 This completes live Sonarr and Radarr coverage of the same automated verifier.
+
+## 2026-08-09 segmented telemetry cycles
+
+Fresh Sonarr and Radarr cycles validated service/indexer enrichment, persistent
+performance telemetry, physical import, and cleanup after migration 6.
+
+The Radarr cycle first exposed an important test-selection edge case: grabbing
+the exact info hash imported on the previous day caused Radarr to discard the
+duplicate-history queue item and request client cleanup without recording a new
+import. The verifier correctly failed instead of reporting success. The library
+was immediately restored with a different accepted hash. Future autonomous
+replacement selection must reject any hash already present in Arr import
+history.
+
+The valid Radarr recovery used hash
+`e54916d6f9ea762ef8f6ff9fbc209e660ec47cfb`:
+
+- the 524,940,512-byte video completed in 29.1 seconds at 18.04 MB/s average;
+- the peak was 20.22 MB/s, using four connections and 32 range requests;
+- retries remained zero and attribution was `radarr` / The Pirate Bay;
+- Radarr registered movie file ID 19; and
+- the Downloadarr job, staging tree, TorBox torrent, and TorBox queue item were
+  absent after import.
+
+The Sonarr cycle used an episode that was already missing locally, avoiding
+destruction of an existing library file. After removing its stale failed queue
+item, Sonarr grabbed hash `2e9c8dd33c6414f8f2c3c7bbeacf022f252b5b40`:
+
+- exactly 4,816,944,005 bytes completed at 17.48 MB/s average and 19.83 MB/s
+  peak;
+- the transfer used four connections with no retries and was attributed to
+  `sonarr` / The Pirate Bay;
+- Sonarr imported the exact-size result as episode file ID 151; and
+- Downloadarr staging and both possible TorBox records were removed while the
+  library file remained.
+
+The normal 91-test suite passed after the live cycles. It includes isolated
+transient and terminal provider failures, persistent failure records, recovery
+timestamps, Arr cleanup retention, and service/indexer dashboard filtering.
