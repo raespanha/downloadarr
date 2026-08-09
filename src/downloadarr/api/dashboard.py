@@ -250,6 +250,8 @@ async def save_settings(request: Request) -> Response:
         values["download"]["connections"] = int(str(form.get("connections", "")))
         values["download"]["provider_max_connections"] = int(
             str(form.get("provider_max_connections", "")))
+        values["download"]["minimum_file_size_mb"] = int(
+            str(form.get("minimum_file_size_mb", "0")))
         values["download"]["transfer_mode"] = str(form.get("transfer_mode", ""))
         values["telemetry"]["retention_days"] = int(str(form.get("retention_days", "0")))
         values["telemetry"]["export_max_rows"] = int(str(
@@ -281,7 +283,16 @@ async def save_settings(request: Request) -> Response:
 def _job_json(job: Job) -> dict:
     size = job.size or 0
     progress = min(max(job.progress, 0.0), 1.0)
-    downloaded = min(size, int(size * progress))
+    files = [{
+        "name": item.relative_path,
+        "size": item.size,
+        "downloaded": min(item.size, item.downloaded),
+        "progress": min(max(item.downloaded / item.size if item.size else 1.0, 0.0), 1.0),
+        "state": item.state,
+        "error": item.error_message,
+    } for item in job.delivery_files]
+    downloaded = min(size, sum(item["downloaded"] for item in files)) if files else min(
+        size, int(size * progress))
     phase = {
         JobState.SUBMITTED.value: "Submitting",
         JobState.PROVIDER_QUEUED.value: "Queued in TorBox",
@@ -308,6 +319,7 @@ def _job_json(job: Job) -> dict:
         "control_scope": job.control_scope,
         "control_error": job.control_error,
         "created_at": job.created_at.isoformat(),
+        "files": files,
     }
 
 

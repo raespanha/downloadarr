@@ -1,5 +1,11 @@
 # Downloadarr Settings
 
+`download.minimum_file_size_mb` controls which TorBox files are delivered locally. Files smaller
+than the configured number of MiB are skipped before a signed download URL is requested. `0`
+keeps every file. The threshold applies when a newly ready torrent's file list is discovered; it
+does not remove files from a transfer already in progress. If every file is below the threshold,
+the job fails visibly instead of reporting a false successful download.
+
 ## Goals
 
 Downloadarr settings are designed to be:

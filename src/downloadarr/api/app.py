@@ -52,6 +52,7 @@ def create_app(settings: Settings | None = None, provider: TorrentProvider | Non
                                  download_connections=min(configured.download.connections,
                                                           configured.download.provider_max_connections),
                                  download_transfer_mode=configured.download.transfer_mode,
+                                 minimum_file_size_mb=configured.download.minimum_file_size_mb,
                                      downloader=downloader, source_resolver=actual_resolver)
             for path in {configured.download.path, *configured.download.categories.values()}:
                 Path(path).mkdir(parents=True, exist_ok=True)

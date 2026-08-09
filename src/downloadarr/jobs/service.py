@@ -31,6 +31,7 @@ class JobService:
                  poll_interval: float = 5.0, queued_poll_interval: float = 30.0,
                  max_backoff: float = 300.0, download_path: Path = Path("/downloads"),
                  download_connections: int = 4, download_transfer_mode: str = "auto",
+                 minimum_file_size_mb: int = 0,
                  max_job_failures: int = 5,
                  downloader: Downloader | None = None,
                  source_resolver: SourceResolver | None = None) -> None:
@@ -38,6 +39,7 @@ class JobService:
         self.poll_interval, self.queued_poll_interval = poll_interval, queued_poll_interval
         self.max_backoff = max_backoff
         self.max_job_failures = max_job_failures
+        self.minimum_file_size_bytes = minimum_file_size_mb * 1024 * 1024
         self.download_path = Path(download_path)
         self._active_tasks: dict[str, asyncio.Task] = {}
         self._controlling: set[str] = set()
@@ -586,6 +588,11 @@ class JobService:
     async def _prepare_delivery(self, job: Job, session) -> None:
         files = await self.provider.get_files(job.provider_job.remote_id)
         if not job.delivery_files:
+            files = [item for item in files if item.size >= self.minimum_file_size_bytes]
+            if not files:
+                raise ValueError(
+                    "no TorBox files meet the configured minimum file size "
+                    f"({self.minimum_file_size_bytes // (1024 * 1024)} MB)")
             relative_paths = _delivery_paths(job.name or job.info_hash, files)
             job.delivery_files = [DeliveryFile(
                 provider_file_id=item.file_id, relative_path=relative,

@@ -22,6 +22,7 @@ class DownloadSettings(BaseModel):
     path: str = "/downloads"
     connections: int = 8
     provider_max_connections: int = 4
+    minimum_file_size_mb: int = 0
     transfer_mode: Literal["auto", "sequential", "parallel"] = "auto"
     categories: dict[str, str] = Field(default_factory=dict)
 
@@ -38,6 +39,13 @@ class DownloadSettings(BaseModel):
     def valid_connections(cls, value: int) -> int:
         if not 1 <= value <= 256:
             raise ValueError("connections must be between 1 and 256")
+        return value
+
+    @field_validator("minimum_file_size_mb")
+    @classmethod
+    def valid_minimum_file_size(cls, value: int) -> int:
+        if not 0 <= value <= 1_000_000:
+            raise ValueError("minimum_file_size_mb must be between 0 and 1000000")
         return value
 
     @field_validator("categories")
@@ -274,6 +282,7 @@ ENVIRONMENT_OVERRIDES: dict[str, tuple[str, ...]] = {
     "DOWNLOADARR_DOWNLOAD_PATH": ("download", "path"),
     "DOWNLOADARR_CONNECTIONS": ("download", "connections"),
     "DOWNLOADARR_PROVIDER_MAX_CONNECTIONS": ("download", "provider_max_connections"),
+    "DOWNLOADARR_MINIMUM_FILE_SIZE_MB": ("download", "minimum_file_size_mb"),
     "DOWNLOADARR_TRANSFER_MODE": ("download", "transfer_mode"),
     "DOWNLOADARR_USERNAME": ("qbittorrent", "username"),
     "DOWNLOADARR_PASSWORD": ("qbittorrent", "password"),
@@ -406,6 +415,7 @@ def _migrate_flat_settings(raw: dict[str, Any]) -> dict[str, Any]:
         "database_url": ("database", "url"),
         "download_path": ("download", "path"),
         "provider_max_connections": ("download", "provider_max_connections"),
+        "minimum_file_size_mb": ("download", "minimum_file_size_mb"),
         "username": ("qbittorrent", "username"),
         "password": ("qbittorrent", "password"),
         "api_key": ("qbittorrent", "api_key"),

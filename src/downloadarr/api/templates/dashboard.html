@@ -16,11 +16,21 @@
     .metric,.card { border:1px solid #263443; border-radius:12px; background:#111923; }
     .metric { padding:16px } .metric span { display:block; color:#8497aa; font-size:12px; text-transform:uppercase; letter-spacing:.08em } .metric strong { display:block; margin-top:5px; font-size:22px; }
     .jobs { display:grid; gap:12px } .card { padding:18px; }
+    .tab-nav { display:flex; gap:6px; margin-bottom:22px; padding:5px; width:max-content; max-width:100%; border:1px solid #263443; border-radius:11px; background:#111923 }
+    .tab-nav button { color:#91a2b5; background:transparent } .tab-nav button.active { color:#062319; background:#36d399 }
+    .tab-panel[hidden] { display:none }
     .job-head { display:flex; justify-content:space-between; gap:16px; align-items:flex-start } .job-title { margin:0; font-size:17px; overflow-wrap:anywhere }
     .meta { display:flex; flex-wrap:wrap; gap:8px 16px; color:#91a2b5; font-size:13px; margin-top:8px }
     .badge { padding:4px 8px; border-radius:99px; background:#233142; color:#b9c8d6; font-size:12px; white-space:nowrap } .badge.completed { background:#153a30;color:#7ee4bf } .badge.failed { background:#46262d;color:#ff9ca8 }
     .progress { height:9px; margin:16px 0 8px; overflow:hidden; border-radius:99px; background:#273442 } .progress div { height:100%; background:linear-gradient(90deg,#24b9ff,#36d399); transition:width .4s }
     .job-foot { display:flex; justify-content:space-between; gap:12px; align-items:center; color:#a4b3c1; font-size:13px } .job-actions form { display:inline }
+    .file-toggle { margin-top:14px; padding:7px 10px; background:#182532; color:#b8c8d7; font-size:12px }
+    .file-list { display:grid; gap:8px; margin-top:10px; padding-top:10px; border-top:1px solid #223140 }
+    .file-row { display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:7px 14px; align-items:center; color:#aebdca; font-size:12px }
+    .file-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#e4edf5 }
+    .file-state { text-transform:capitalize; color:#8497aa }
+    .file-progress { grid-column:1/-1; height:5px; overflow:hidden; border-radius:99px; background:#273442 }
+    .file-progress div { height:100%; background:#24b9ff; transition:width .4s }
     details { margin-top:28px; border:1px solid #263443; border-radius:12px; background:#111923; } summary { cursor:pointer; padding:17px; font-weight:800 } .settings { padding:0 18px 20px; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
     label { display:block; color:#aebdca; font-size:13px } input,select,textarea { width:100%; margin-top:6px; padding:10px; border:1px solid #34465a; border-radius:8px; background:#0b121a; color:#fff } textarea { min-height:120px; font-family:ui-monospace,monospace } .wide { grid-column:1/-1 }
     .empty { padding:40px; text-align:center; color:#8193a5; border:1px dashed #304153; border-radius:12px }
@@ -51,7 +61,7 @@
     .history { margin-top:22px; overflow-x:auto } .history h3 { margin:0 0 10px; font-size:15px }
     table { width:100%; border-collapse:collapse; font-size:13px } th,td { padding:10px 8px; border-bottom:1px solid #223140; text-align:left; white-space:nowrap }
     th { color:#8497aa; font-size:11px; letter-spacing:.06em; text-transform:uppercase } td:first-child { max-width:420px; overflow:hidden; text-overflow:ellipsis }
-    @media(max-width:700px){body{overflow-x:hidden}header{gap:10px;padding:16px 20px}header h1{font-size:21px}.toolbar #updated{display:none}.summary,.performance-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.settings,.segments{grid-template-columns:1fr}.wide{grid-column:auto}.job-head,.job-foot,.section-head{align-items:stretch;flex-direction:column}.range-picker{align-self:flex-start}.card{min-width:0}.job-actions{align-self:flex-end}}
+    @media(max-width:700px){body{overflow-x:hidden}header{gap:10px;padding:16px 20px}header h1{font-size:21px}.toolbar #updated{display:none}.summary,.performance-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.settings,.segments{grid-template-columns:1fr}.wide{grid-column:auto}.job-head,.job-foot,.section-head{align-items:stretch;flex-direction:column}.range-picker{align-self:flex-start}.card{min-width:0}.job-actions{align-self:flex-end}.file-row{grid-template-columns:minmax(0,1fr) auto}.file-state{grid-column:1/-1}}
   </style>
 </head>
 <body>
@@ -59,13 +69,17 @@
 <main>
   {% if saved %}<div class="notice">Settings saved atomically. Restart Downloadarr to apply them.</div>{% endif %}
   {% if error %}<div class="notice error">The requested operation failed. Check the values and service logs.</div>{% endif %}
+  <nav class="tab-nav" aria-label="Dashboard sections"><button type="button" class="active" data-tab="downloads">Downloads</button><button type="button" data-tab="monitoring">Monitoring &amp; logs</button><button type="button" data-tab="settings">Settings</button></nav>
+  <section id="downloads-view" class="tab-panel">
   <section class="summary">
     <div class="metric"><span>Jobs</span><strong id="job-count">0</strong></div>
     <div class="metric"><span>Active</span><strong id="active-count">0</strong></div>
     <div class="metric"><span>Speed</span><strong id="total-speed">0 B/s</strong></div>
-    <div class="metric"><span>Completed (selected period)</span><strong id="completed-count">0</strong></div>
+    <div class="metric"><span>Downloaded locally</span><strong id="downloaded-total">0 B</strong></div>
   </section>
   <section id="jobs" class="jobs"><div class="empty">Loading downloads&hellip;</div></section>
+  </section>
+  <section id="monitoring-view" class="tab-panel" hidden>
   <section class="performance" aria-labelledby="monitor-title">
     <div class="section-head"><div><h2 id="monitor-title">Operational health</h2><p>Observed Downloadarr phases, cleanup, retries, and deduplicated incidents.</p></div><div><a class="button" href="/ui/api/export?dataset=lifecycle&format=json&range=30d">Export JSON</a> <a class="button" href="/ui/api/export?dataset=lifecycle&format=csv&range=30d">Export CSV</a></div></div>
     <div class="performance-summary"><div class="metric"><span>Open incidents</span><strong id="monitor-open">0</strong></div><div class="metric"><span>Lifecycle events</span><strong id="monitor-events">0</strong></div><div class="metric"><span>Evaluator</span><strong id="monitor-heartbeat">Checking</strong></div><div class="metric"><span>Timing</span><strong>Observed wall</strong></div></div>
@@ -87,6 +101,7 @@
       </div>
     </div>
     <div class="performance-summary">
+      <div class="metric"><span>Completed downloads</span><strong id="completed-count">0</strong></div>
       <div class="metric"><span>Average</span><strong id="history-average">0 B/s</strong></div>
       <div class="metric"><span>Peak</span><strong id="history-peak">0 B/s</strong></div>
       <div class="metric"><span>Delivered</span><strong id="history-bytes">0 B</strong></div>
@@ -100,7 +115,9 @@
     <div class="history"><h3>Recent failures</h3><table><thead><tr><th>Download</th><th>Service</th><th>Indexer</th><th>Stage</th><th>Error</th><th>When</th><th>Status</th></tr></thead><tbody id="failure-rows"></tbody></table></div>
     <div class="history"><h3>Recent transfers</h3><table><thead><tr><th>Download</th><th>Service</th><th>Indexer</th><th>Completed</th><th>Size</th><th>Average</th><th>Peak</th><th>Connections</th><th>Retries</th></tr></thead><tbody id="history-rows"></tbody></table></div>
   </section>
-  <details>
+  </section>
+  <section id="settings-view" class="tab-panel" hidden>
+  <details open>
     <summary>Settings</summary>
     <form class="settings" method="post" action="/ui/settings">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -108,6 +125,7 @@
       <label>Transfer mode<select name="transfer_mode"><option value="auto" {% if settings.download.transfer_mode == 'auto' %}selected{% endif %}>Auto</option><option value="parallel" {% if settings.download.transfer_mode == 'parallel' %}selected{% endif %}>Parallel</option><option value="sequential" {% if settings.download.transfer_mode == 'sequential' %}selected{% endif %}>Sequential</option></select></label>
       <label>Connections<input name="connections" type="number" min="1" max="256" value="{{ settings.download.connections }}" required></label>
       <label>Provider connection ceiling<input name="provider_max_connections" type="number" min="1" max="256" value="{{ settings.download.provider_max_connections }}" required></label>
+      <label>Minimum file size (MB)<input name="minimum_file_size_mb" type="number" min="0" max="1000000" value="{{ settings.download.minimum_file_size_mb }}" required><small>Files smaller than this are skipped. Use 0 to download every file.</small></label>
       <label>Telemetry retention days (0 = unlimited)<input name="retention_days" type="number" min="0" max="3650" value="{{ settings.telemetry.retention_days }}" required></label>
       <label>Maximum export rows<input name="export_max_rows" type="number" min="100" max="50000" value="{{ settings.telemetry.export_max_rows }}" required></label>
       <label class="wide">Default download path<input name="download_path" value="{{ settings.download.path }}" required></label>
@@ -121,16 +139,19 @@
       <div class="wide"><button class="primary" type="submit">Save settings</button> <small>Environment-managed fields: {{ managed_fields|join(', ') or 'none' }}</small></div>
     </form>
   </details>
+  </section>
 </main>
 <script>
 const jobsNode=document.querySelector('#jobs');
 const csrfToken={{ csrf_token|tojson }};
+const expandedJobs=new Set();
 const fmtBytes=n=>{if(!n)return '0 B';const u=['B','KB','MB','GB','TB'];const i=Math.min(Math.floor(Math.log(n)/Math.log(1024)),u.length-1);return `${(n/1024**i).toFixed(i?1:0)} ${u[i]}`};
 const fmtEta=n=>n==null?'—':n<=0?'Done':`${Math.floor(n/3600)}:${String(Math.floor(n%3600/60)).padStart(2,'0')}:${String(n%60).padStart(2,'0')}`;
 function render(values){
   const active=values.filter(v=>!['completed','failed'].includes(v.state));
   document.querySelector('#job-count').textContent=values.length;document.querySelector('#active-count').textContent=active.length;
   document.querySelector('#total-speed').textContent=fmtBytes(values.reduce((a,v)=>a+v.speed,0))+'/s';
+  document.querySelector('#downloaded-total').textContent=fmtBytes(values.reduce((a,v)=>a+v.downloaded,0));
   jobsNode.replaceChildren();
   if(!values.length){jobsNode.innerHTML='<div class="empty">No active downloads.</div>';return}
   for(const job of values){
@@ -141,6 +162,11 @@ function render(values){
     if(job.control_state==='paused')addAction('resume','Resume');else if(!['completed','failed'].includes(job.state))addAction('pause','Pause local transfer');
     if(['failed','retry_wait'].includes(job.state))addAction('retry','Retry');
     addAction('remove','Remove',true,'Remove this job from Downloadarr and TorBox?');
+    const toggle=document.createElement('button');toggle.type='button';toggle.className='file-toggle';toggle.textContent=`Files (${job.files.length})`;toggle.setAttribute('aria-expanded',expandedJobs.has(job.hash));
+    const list=document.createElement('div');list.className='file-list';list.hidden=!expandedJobs.has(job.hash);
+    if(!job.files.length){const empty=document.createElement('span');empty.textContent='File list becomes available when TorBox is ready.';list.append(empty)}
+    for(const file of job.files){const row=document.createElement('div');row.className='file-row';const name=document.createElement('span');name.className='file-name';name.textContent=file.name;name.title=file.name;const size=document.createElement('span');size.textContent=fmtBytes(file.size);const state=document.createElement('span');state.className='file-state';state.textContent=`${(file.progress*100).toFixed(1)}% · ${file.state}`;const bar=document.createElement('div');bar.className='file-progress';const fill=document.createElement('div');fill.style.width=(file.progress*100).toFixed(1)+'%';bar.append(fill);row.append(name,size,state,bar);if(file.error)row.title=file.error;list.append(row)}
+    toggle.addEventListener('click',()=>{const open=list.hidden;list.hidden=!open;toggle.setAttribute('aria-expanded',open);if(open)expandedJobs.add(job.hash);else expandedJobs.delete(job.hash)});card.append(toggle,list);
     card.querySelector('.job-title').textContent=job.name;card.querySelector('.category').textContent=job.category||'Uncategorized';card.querySelector('.badge').textContent=job.control_state==='paused'?'Paused':job.phase;card.querySelector('.status-line').textContent=`${pct}% · ${fmtBytes(job.speed)}/s · ETA ${fmtEta(job.eta)}${job.control_state==='paused'?' · TorBox may continue while Downloadarr is paused':''}${job.control_error?' · '+job.control_error:job.error?' · '+job.error:''}`;jobsNode.append(card);
   }
   document.querySelector('#updated').textContent='Updated '+new Date().toLocaleTimeString();
@@ -171,8 +197,10 @@ function renderHistory(data){
   for(const item of data.recent){const row=body.insertRow();const values=[item.name,item.service,item.indexer,new Date(item.completed_at).toLocaleString(),fmtBytes(item.bytes),fmtBytes(item.average_speed)+'/s',fmtBytes(item.peak_speed)+'/s',item.connections,item.retries];values.forEach(value=>{const cell=row.insertCell();cell.textContent=value});row.title=item.file}
 }
 async function loadPerformance(range=selectedRange){selectedRange=range;document.querySelectorAll('[data-range]').forEach(b=>b.classList.toggle('active',b.dataset.range===range));try{const query=new URLSearchParams({range,service:selectedService,indexer:selectedIndexer});const response=await fetch('/ui/api/performance?'+query);if(response.status===403){location='/ui/login';return}if(!response.ok)throw new Error('performance request failed');renderHistory(await response.json())}catch(e){document.querySelector('#history-rows').innerHTML='<tr><td colspan="9">Performance history is unavailable.</td></tr>'}}
-document.querySelectorAll('[data-range]').forEach(button=>button.addEventListener('click',()=>loadPerformance(button.dataset.range)));window.addEventListener('resize',()=>drawChart(chartValues));
+document.querySelectorAll('[data-range]').forEach(button=>button.addEventListener('click',()=>loadPerformance(button.dataset.range)));window.addEventListener('resize',()=>{if(!document.querySelector('#monitoring-view').hidden)drawChart(chartValues)});
 document.querySelector('#service-filter').addEventListener('change',event=>{selectedService=event.target.value;loadPerformance()});document.querySelector('#indexer-filter').addEventListener('change',event=>{selectedIndexer=event.target.value;loadPerformance()});
-refresh();loadMonitoring();loadPerformance();setInterval(refresh,2000);setInterval(loadMonitoring,30000);setInterval(()=>loadPerformance(),30000);
+function activateTab(name){document.querySelectorAll('.tab-panel').forEach(panel=>panel.hidden=panel.id!==name+'-view');document.querySelectorAll('[data-tab]').forEach(button=>button.classList.toggle('active',button.dataset.tab===name));history.replaceState(null,'','#'+name);if(name==='monitoring'){loadMonitoring();loadPerformance()}}
+document.querySelectorAll('[data-tab]').forEach(button=>button.addEventListener('click',()=>activateTab(button.dataset.tab)));
+const initialTab=['downloads','monitoring','settings'].includes(location.hash.slice(1))?location.hash.slice(1):'downloads';activateTab(initialTab);refresh();setInterval(refresh,2000);setInterval(()=>{if(!document.querySelector('#monitoring-view').hidden){loadMonitoring();loadPerformance()}},30000);
 </script>
 </body></html>

@@ -182,6 +182,9 @@ async def test_dashboard_requires_login_and_lists_jobs_without_secrets(tmp_path)
             jobs = (await client.get("/ui/api/jobs")).json()
             assert jobs[0]["phase"] == "Submitting"
             assert jobs[0]["hash"] == HASH
+            assert jobs[0]["files"] == []
+            assert 'data-tab="monitoring"' in page.text
+            assert 'id="downloads-view"' in page.text
 
 
 async def test_dashboard_login_and_settings_save(tmp_path):
@@ -204,6 +207,7 @@ async def test_dashboard_login_and_settings_save(tmp_path):
                 "transfer_mode": "parallel",
                 "connections": "12",
                 "provider_max_connections": "4",
+                "minimum_file_size_mb": "50",
                 "download_path": "/torbox",
                 "categories": '{"tv-sonarr":"/torbox/tv-sonarr"}',
             }, follow_redirects=False)
@@ -212,6 +216,58 @@ async def test_dashboard_login_and_settings_save(tmp_path):
             assert restored.torbox_api_token.get_secret_value() == "replacement-secret"
             assert restored.download.connections == 12
             assert restored.download.transfer_mode == "parallel"
+            assert restored.download.minimum_file_size_mb == 50
+
+
+async def test_minimum_file_size_filters_delivery_before_download(tmp_path):
+    values = settings(tmp_path).model_dump()
+    values["download"]["minimum_file_size_mb"] = 1
+    configured = Settings.model_validate(values)
+    provider = FakeProvider()
+    provider.torrent = ProviderTorrent(42, HASH, "Test.Release", "cached", 2_500_000,
+                                       1, 0, 0, True, True)
+    provider.files = [ProviderFile(1, "small.nfo", 100_000),
+                      ProviderFile(2, "video.mkv", 2_000_000)]
+    app = create_app(configured, provider, start_poller=False, downloader=FakeDownloader())
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                     base_url="http://test") as client:
+            await login(client)
+            await client.post("/api/v2/torrents/add", data={"urls": MAGNET})
+            job = (await app.state.job_service.jobs())[0]
+            for _ in range(3):
+                await app.state.job_service.process(job.id)
+            prepared = await app.state.job_service.job(HASH)
+            assert [(item.provider_file_id, item.relative_path) for item in
+                    prepared.delivery_files] == [(2, "video.mkv")]
+            dashboard_job = (await client.get("/ui/api/jobs")).json()[0]
+            assert dashboard_job["files"][0]["name"] == "video.mkv"
+            assert dashboard_job["files"][0]["progress"] == 0
+            assert provider.download_requests == []
+
+
+async def test_minimum_file_size_fails_when_every_file_is_filtered(tmp_path):
+    values = settings(tmp_path).model_dump()
+    values["download"]["minimum_file_size_mb"] = 1
+    configured = Settings.model_validate(values)
+    provider = FakeProvider()
+    provider.torrent = ProviderTorrent(42, HASH, "Test.Release", "cached", 100_000,
+                                       1, 0, 0, True, True)
+    provider.files = [ProviderFile(1, "small.nfo", 100_000)]
+    app = create_app(configured, provider, start_poller=False, downloader=FakeDownloader())
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                     base_url="http://test") as client:
+            await login(client)
+            await client.post("/api/v2/torrents/add", data={"urls": MAGNET})
+            job = (await app.state.job_service.jobs())[0]
+            for _ in range(3):
+                await app.state.job_service.process(job.id)
+            failed = await app.state.job_service.job(HASH)
+            assert failed.state == JobState.FAILED.value
+            assert failed.error_code == "DELIVERY_FAILED"
+            assert "minimum file size" in failed.error_message
+            assert provider.download_requests == []
 
 
 async def test_dashboard_rejects_cross_origin_writes(tmp_path):
