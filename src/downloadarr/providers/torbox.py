@@ -157,8 +157,17 @@ class TorBoxProvider:
         return data
 
     async def delete_torrent(self, remote_id: int) -> None:
+        await self._control_torrent(remote_id, "delete")
+
+    async def pause_torrent(self, remote_id: int) -> None:
+        await self._control_torrent(remote_id, "pause")
+
+    async def resume_torrent(self, remote_id: int) -> None:
+        await self._control_torrent(remote_id, "resume")
+
+    async def _control_torrent(self, remote_id: int, operation: str) -> None:
         await self._request("POST", "/torrents/controltorrent", json={
-            "torrent_id": remote_id, "operation": "delete", "all": False,
+            "torrent_id": remote_id, "operation": operation, "all": False,
         })
 
     async def delete_queued(self, queued_id: int) -> None:

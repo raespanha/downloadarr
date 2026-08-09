@@ -5,6 +5,15 @@
 > exposed service credentials even when those credentials were never committed
 > to Git.
 
+## Operational controls
+
+- Run exactly one Downloadarr process/Uvicorn worker. Database leases for multi-process scheduling
+  are not implemented yet.
+- A paused local delivery does not necessarily pause TorBox. The dashboard reports whether the pause
+  scope is local-only or local plus provider.
+- Keep `.downloadarr.part`, `.downloadarr.json`, and `.downloadarr.receipt.json` files together with
+  the download volume; they are required for safe resume/crash reconciliation.
+
 ## Required security checks
 
 - Rotate the Prowlarr API key. Sonarr history and debug logs can embed it in

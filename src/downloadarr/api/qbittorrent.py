@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, PlainTextResponse
 from starlette.datastructures import UploadFile
 
-from ..db.models import Job, JobState
+from ..db.models import ControlState, Job, JobState
 from ..jobs.service import JobService
 from ..magnets import MagnetError, parse_magnet
 from ..providers.base import ProviderError
@@ -125,9 +125,22 @@ async def add_torrent(request: Request, job_service: JobService = Depends(servic
 @router.get("/api/v2/torrents/info", dependencies=[Depends(require_auth)])
 async def torrents_info(request: Request, category: str | None = None, hashes: str | None = None,
                         job_service: JobService = Depends(service)) -> list[dict]:
-    hash_values = hashes.split("|") if hashes else None
+    hash_values = (None if not hashes or hashes.lower() == "all" else hashes.split("|"))
     jobs = await job_service.jobs(category, hash_values)
     return [_torrent_json(job, request.app.state.settings.download_path.as_posix()) for job in jobs]
+
+
+@router.get("/api/v2/sync/maindata", dependencies=[Depends(require_auth)])
+async def main_data(request: Request, rid: int = 0,
+                    job_service: JobService = Depends(service)) -> dict:
+    jobs = await job_service.jobs()
+    torrents = {job.info_hash: _torrent_json(
+        job, request.app.state.settings.download_path.as_posix()) for job in jobs}
+    categories = {item.name: {"name": item.name, "savePath": item.save_path}
+                  for item in await job_service.categories()}
+    return {"rid": max(rid + 1, int(time.time())), "full_update": True,
+            "torrents": torrents, "categories": categories,
+            "server_state": await transfer_info(job_service)}
 
 
 @router.get("/api/v2/torrents/properties", dependencies=[Depends(require_auth)])
@@ -177,12 +190,17 @@ def _torrent_json(job: Job, default_save_path: str) -> dict:
         content_path = str(PurePosixPath(save_path) / root)
     else:
         content_path = str(PurePosixPath(save_path) / name)
+    state = state_map[job.state]
+    if (job.control_state == ControlState.PAUSED.value
+            and job.state != JobState.COMPLETED.value):
+        state = "pausedDL"
     return {"hash": job.info_hash, "name": name, "size": size,
-            "progress": min(max(job.progress, 0), 1), "state": state_map[job.state],
+            "progress": min(max(job.progress, 0), 1), "state": state,
             "category": job.category.name if job.category else "", "save_path": save_path,
             "content_path": content_path,
             "amount_left": size - completed, "completed": completed,
-            "dlspeed": job.download_speed, "upspeed": 0,
+            "dlspeed": (0 if job.control_state == ControlState.PAUSED.value
+                         else job.download_speed), "upspeed": 0,
             "eta": job.eta if job.eta is not None else 8640000,
             # Debrid jobs never seed. Explicit zero limits tell Servarr that
             # the paused completed item has already met its seed goal and is
@@ -209,6 +227,28 @@ async def delete_torrents(request: Request,
         await job_service.remove(hashes, delete_files)
     except (ProviderError, ValueError):
         return PlainTextResponse("Fails.", status_code=400)
+    return Response(status_code=200)
+
+
+@router.post("/api/v2/torrents/pause", dependencies=[Depends(require_auth)])
+@router.post("/api/v2/torrents/stop", dependencies=[Depends(require_auth)])
+async def pause_torrents(request: Request,
+                         job_service: JobService = Depends(service)) -> Response:
+    hashes = await _control_hashes(request, job_service)
+    if hashes is None:
+        return PlainTextResponse("Fails.", status_code=400)
+    await job_service.pause(hashes)
+    return Response(status_code=200)
+
+
+@router.post("/api/v2/torrents/resume", dependencies=[Depends(require_auth)])
+@router.post("/api/v2/torrents/start", dependencies=[Depends(require_auth)])
+async def resume_torrents(request: Request,
+                          job_service: JobService = Depends(service)) -> Response:
+    hashes = await _control_hashes(request, job_service)
+    if hashes is None:
+        return PlainTextResponse("Fails.", status_code=400)
+    await job_service.resume(hashes)
     return Response(status_code=200)
 
 
@@ -248,3 +288,14 @@ async def _accepted_torrent_control(request: Request) -> Response:
     if not str(form.get("hashes", "")):
         return PlainTextResponse("Fails.", status_code=400)
     return Response(status_code=200)
+
+
+async def _control_hashes(request: Request,
+                          job_service: JobService) -> list[str] | None:
+    form = await request.form()
+    raw = str(form.get("hashes", "")).strip()
+    if not raw:
+        return None
+    if raw.lower() == "all":
+        return [job.info_hash for job in await job_service.jobs()]
+    return [value.lower() for value in raw.split("|") if value]

@@ -46,7 +46,8 @@ async def login(request: Request) -> Response:
 
 @router.post("/ui/logout", dependencies=[Depends(require_auth)])
 async def logout(request: Request) -> Response:
-    _require_same_origin(request)
+    form = await request.form()
+    _require_ui_mutation(request, form)
     request.app.state.auth_sessions.remove(request.cookies.get("SID"))
     response = RedirectResponse("/ui/login", status_code=303)
     response.delete_cookie("SID")
@@ -64,6 +65,7 @@ async def dashboard(request: Request):
         "managed_fields": request.app.state.settings_service.managed_fields(),
         "saved": request.query_params.get("saved") == "1",
         "error": request.query_params.get("error"),
+        "csrf_token": request.app.state.auth_sessions.csrf(request.cookies.get("SID")),
     })
 
 
@@ -105,20 +107,30 @@ async def performance(request: Request, range: str = "7d", service: str = "all",
 
 @router.post("/ui/jobs/{info_hash}/remove", dependencies=[Depends(require_auth)])
 async def remove_job(info_hash: str, request: Request) -> Response:
-    _require_same_origin(request)
     form = await request.form()
+    _require_ui_mutation(request, form)
     delete_files = str(form.get("deleteFiles", "false")).lower() == "true"
     try:
-        await request.app.state.job_service.remove([info_hash], delete_files)
+        await request.app.state.job_service.remove([info_hash], delete_files, actor="dashboard")
     except (ProviderError, OSError, ValueError):
         return RedirectResponse("/?error=remove_failed", status_code=303)
     return RedirectResponse("/", status_code=303)
 
 
+@router.post("/ui/jobs/{info_hash}/{command}", dependencies=[Depends(require_auth)])
+async def control_job(info_hash: str, command: str, request: Request) -> Response:
+    if command not in {"pause", "resume", "retry"}:
+        raise HTTPException(status_code=404, detail="Unknown control")
+    form = await request.form()
+    _require_ui_mutation(request, form)
+    await getattr(request.app.state.job_service, command)([info_hash], actor="dashboard")
+    return RedirectResponse("/", status_code=303)
+
+
 @router.post("/ui/settings", dependencies=[Depends(require_auth)])
 async def save_settings(request: Request) -> Response:
-    _require_same_origin(request)
     form = await request.form()
+    _require_ui_mutation(request, form)
     current: Settings = request.app.state.settings
     values = current.storage_dict()
     try:
@@ -177,6 +189,9 @@ def _job_json(job: Job) -> dict:
         "speed": job.download_speed,
         "eta": job.eta,
         "error": job.error_message,
+        "control_state": job.control_state,
+        "control_scope": job.control_scope,
+        "control_error": job.control_error,
         "created_at": job.created_at.isoformat(),
     }
 
@@ -304,3 +319,12 @@ def _require_same_origin(request: Request) -> None:
     origin = request.headers.get("origin")
     if origin and origin.rstrip("/") != str(request.base_url).rstrip("/"):
         raise HTTPException(status_code=403, detail="Cross-origin form submission rejected")
+
+
+def _require_ui_mutation(request: Request, form) -> None:
+    _require_same_origin(request)
+    sid = request.cookies.get("SID")
+    expected = request.app.state.auth_sessions.csrf(sid)
+    supplied = str(form.get("csrf_token", ""))
+    if expected is None or not hmac.compare_digest(expected, supplied):
+        raise HTTPException(status_code=403, detail="Invalid CSRF token")

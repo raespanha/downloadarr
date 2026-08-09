@@ -127,12 +127,20 @@ class SchedulerSettings(BaseModel):
     poll_interval: float = 5.0
     queued_poll_interval: float = 30.0
     max_poll_backoff: float = 300.0
+    max_job_failures: int = 5
 
     @field_validator("provider_concurrency")
     @classmethod
     def valid_concurrency(cls, value: int) -> int:
         if not 1 <= value <= 64:
             raise ValueError("provider_concurrency must be between 1 and 64")
+        return value
+
+    @field_validator("max_job_failures")
+    @classmethod
+    def valid_failures(cls, value: int) -> int:
+        if not 1 <= value <= 100:
+            raise ValueError("max_job_failures must be between 1 and 100")
         return value
 
     @field_validator("poll_interval", "queued_poll_interval", "max_poll_backoff")
@@ -211,6 +219,10 @@ class Settings(BaseModel):
     def max_poll_backoff(self) -> float:
         return self.scheduler.max_poll_backoff
 
+    @property
+    def max_job_failures(self) -> int:
+        return self.scheduler.max_job_failures
+
     def masked(self) -> dict[str, Any]:
         data = self.model_dump(mode="json")
         data["qbittorrent"]["password"] = "********"
@@ -257,6 +269,7 @@ ENVIRONMENT_OVERRIDES: dict[str, tuple[str, ...]] = {
     "DOWNLOADARR_POLL_INTERVAL": ("scheduler", "poll_interval"),
     "DOWNLOADARR_QUEUED_POLL_INTERVAL": ("scheduler", "queued_poll_interval"),
     "DOWNLOADARR_MAX_POLL_BACKOFF": ("scheduler", "max_poll_backoff"),
+    "DOWNLOADARR_MAX_JOB_FAILURES": ("scheduler", "max_job_failures"),
 }
 
 
@@ -346,6 +359,7 @@ def _migrate_flat_settings(raw: dict[str, Any]) -> dict[str, Any]:
         "poll_interval": ("scheduler", "poll_interval"),
         "queued_poll_interval": ("scheduler", "queued_poll_interval"),
         "max_poll_backoff": ("scheduler", "max_poll_backoff"),
+        "max_job_failures": ("scheduler", "max_job_failures"),
     }
     migrated: dict[str, Any] = {"schema_version": 1}
     for key, value in raw.items():

@@ -54,7 +54,7 @@
   </style>
 </head>
 <body>
-<header><h1>Download<span class="accent">arr</span></h1><div class="toolbar"><span id="updated"></span><form method="post" action="/ui/logout"><button>Sign out</button></form></div></header>
+<header><h1>Download<span class="accent">arr</span></h1><div class="toolbar"><span id="updated"></span><form method="post" action="/ui/logout"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button>Sign out</button></form></div></header>
 <main>
   {% if saved %}<div class="notice">Settings saved atomically. Restart Downloadarr to apply them.</div>{% endif %}
   {% if error %}<div class="notice error">The requested operation failed. Check the values and service logs.</div>{% endif %}
@@ -95,6 +95,7 @@
   <details>
     <summary>Settings</summary>
     <form class="settings" method="post" action="/ui/settings">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <label>TorBox token<input name="torbox_token" type="password" value="" placeholder="{% if settings.torbox.api_token %}Configured — leave blank to keep{% else %}Not configured{% endif %}" autocomplete="new-password"></label>
       <label>Transfer mode<select name="transfer_mode"><option value="auto" {% if settings.download.transfer_mode == 'auto' %}selected{% endif %}>Auto</option><option value="parallel" {% if settings.download.transfer_mode == 'parallel' %}selected{% endif %}>Parallel</option><option value="sequential" {% if settings.download.transfer_mode == 'sequential' %}selected{% endif %}>Sequential</option></select></label>
       <label>Connections<input name="connections" type="number" min="1" max="256" value="{{ settings.download.connections }}" required></label>
@@ -113,6 +114,7 @@
 </main>
 <script>
 const jobsNode=document.querySelector('#jobs');
+const csrfToken={{ csrf_token|tojson }};
 const fmtBytes=n=>{if(!n)return '0 B';const u=['B','KB','MB','GB','TB'];const i=Math.min(Math.floor(Math.log(n)/Math.log(1024)),u.length-1);return `${(n/1024**i).toFixed(i?1:0)} ${u[i]}`};
 const fmtEta=n=>n==null?'—':n<=0?'Done':`${Math.floor(n/3600)}:${String(Math.floor(n%3600/60)).padStart(2,'0')}:${String(n%60).padStart(2,'0')}`;
 function render(values){
@@ -123,8 +125,13 @@ function render(values){
   if(!values.length){jobsNode.innerHTML='<div class="empty">No active downloads.</div>';return}
   for(const job of values){
     const card=document.createElement('article');card.className='card';const pct=(job.progress*100).toFixed(1);
-    card.innerHTML=`<div class="job-head"><div><h2 class="job-title"></h2><div class="meta"><span class="category"></span><span>${fmtBytes(job.size)}</span><span>${job.hash.slice(0,8)}</span></div></div><span class="badge ${job.state}"></span></div><div class="progress"><div style="width:${pct}%"></div></div><div class="job-foot"><span class="status-line"></span><span class="job-actions"><form method="post" action="/ui/jobs/${job.hash}/remove" onsubmit="return confirm('Remove this job from Downloadarr and TorBox?')"><input type="hidden" name="deleteFiles" value="false"><button class="danger">Remove</button></form></span></div>`;
-    card.querySelector('.job-title').textContent=job.name;card.querySelector('.category').textContent=job.category||'Uncategorized';card.querySelector('.badge').textContent=job.phase;card.querySelector('.status-line').textContent=`${pct}% · ${fmtBytes(job.speed)}/s · ETA ${fmtEta(job.eta)}${job.error?' · '+job.error:''}`;jobsNode.append(card);
+    card.innerHTML=`<div class="job-head"><div><h2 class="job-title"></h2><div class="meta"><span class="category"></span><span>${fmtBytes(job.size)}</span><span>${job.hash.slice(0,8)}</span></div></div><span class="badge ${job.state}"></span></div><div class="progress"><div style="width:${pct}%"></div></div><div class="job-foot"><span class="status-line"></span><span class="job-actions"></span></div>`;
+    const actions=card.querySelector('.job-actions');
+    const addAction=(command,label,danger=false,confirmText='')=>{const form=document.createElement('form');form.method='post';form.action=`/ui/jobs/${job.hash}/${command}`;form.innerHTML=`<input type="hidden" name="csrf_token"><button${danger?' class="danger"':''}></button>`;form.querySelector('input').value=csrfToken;form.querySelector('button').textContent=label;if(confirmText)form.onsubmit=()=>confirm(confirmText);form.addEventListener('submit',()=>{form.querySelector('button').disabled=true});actions.append(form)};
+    if(job.control_state==='paused')addAction('resume','Resume');else if(!['completed','failed'].includes(job.state))addAction('pause','Pause local transfer');
+    if(['failed','retry_wait'].includes(job.state))addAction('retry','Retry');
+    addAction('remove','Remove',true,'Remove this job from Downloadarr and TorBox?');
+    card.querySelector('.job-title').textContent=job.name;card.querySelector('.category').textContent=job.category||'Uncategorized';card.querySelector('.badge').textContent=job.control_state==='paused'?'Paused':job.phase;card.querySelector('.status-line').textContent=`${pct}% · ${fmtBytes(job.speed)}/s · ETA ${fmtEta(job.eta)}${job.control_state==='paused'?' · TorBox may continue while Downloadarr is paused':''}${job.control_error?' · '+job.control_error:job.error?' · '+job.error:''}`;jobsNode.append(card);
   }
   document.querySelector('#updated').textContent='Updated '+new Date().toLocaleTimeString();
 }

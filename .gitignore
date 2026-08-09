@@ -3,6 +3,7 @@ venv/
 .env
 config/settings.json
 config/settings.*.bak.json
+config/settings.*.json
 config/*.db
 config/*.db-*
 __pycache__/
@@ -12,6 +13,8 @@ __pycache__/
 *.downloadarr.part
 *.downloadarr.json
 *.downloadarr.json.tmp
+*.downloadarr.receipt.json
+*.downloadarr.receipt.json.tmp
 *.mkv
 *.mp4
 *.avi

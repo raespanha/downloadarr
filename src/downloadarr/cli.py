@@ -49,6 +49,7 @@ async def _run(args) -> int:
             last = percent
             print(f"\r{percent:3d}%  {value.downloaded_bytes}/{value.total_bytes} bytes", end="", flush=True)
     result = await downloader.download(provider, args.output, progress)
+    result.path.with_name(result.path.name + ".downloadarr.receipt.json").unlink(missing_ok=True)
     if args.json:
         print(json.dumps({
             "path": str(result.path),

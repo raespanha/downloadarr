@@ -135,5 +135,31 @@ CREATE INDEX idx_failure_events_service_occurred
 ON failure_events(service, occurred_at);
 CREATE INDEX idx_failure_events_indexer_occurred
 ON failure_events(indexer, occurred_at);
+""",
+    7: """
+ALTER TABLE jobs ADD COLUMN control_state VARCHAR(16) NOT NULL DEFAULT 'running';
+ALTER TABLE jobs ADD COLUMN paused_at DATETIME;
+ALTER TABLE jobs ADD COLUMN control_scope VARCHAR(32);
+ALTER TABLE jobs ADD COLUMN control_error TEXT;
+ALTER TABLE jobs ADD COLUMN remove_delete_files INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE jobs ADD COLUMN remote_cleanup_done INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE jobs ADD COLUMN local_cleanup_done INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX idx_jobs_control_next_poll ON jobs(control_state, next_poll_at);
+CREATE TABLE control_events (
+    id VARCHAR(36) NOT NULL PRIMARY KEY,
+    job_id VARCHAR(36) NOT NULL,
+    info_hash VARCHAR(40) NOT NULL,
+    service VARCHAR(32) NOT NULL,
+    indexer VARCHAR(255) NOT NULL,
+    command VARCHAR(32) NOT NULL,
+    actor VARCHAR(32) NOT NULL,
+    from_state VARCHAR(32) NOT NULL,
+    to_state VARCHAR(32) NOT NULL,
+    outcome VARCHAR(32) NOT NULL,
+    detail TEXT,
+    occurred_at DATETIME NOT NULL
+);
+CREATE INDEX idx_control_events_hash ON control_events(info_hash);
+CREATE INDEX idx_control_events_occurred_at ON control_events(occurred_at);
 """
 }

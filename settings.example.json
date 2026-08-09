@@ -41,6 +41,7 @@
     "provider_concurrency": 4,
     "poll_interval": 5,
     "queued_poll_interval": 30,
-    "max_poll_backoff": 300
+    "max_poll_backoff": 300,
+    "max_job_failures": 5
   }
 }

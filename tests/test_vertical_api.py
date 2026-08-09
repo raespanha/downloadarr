@@ -9,7 +9,7 @@ from pydantic import SecretStr
 
 from downloadarr.api import create_app
 from downloadarr.arr_metadata import SourceMetadata
-from downloadarr.db.models import JobState
+from downloadarr.db.models import ControlState, JobState
 from downloadarr.providers.base import (ProviderFile, ProviderQueuedTorrent, ProviderSubmission,
                                         ProviderError, ProviderTorrent)
 from downloadarr.settings import Settings, SettingsService, load_settings
@@ -34,6 +34,8 @@ class FakeProvider:
         self.download_requests = []
         self.deleted_torrents = []
         self.deleted_queued = []
+        self.paused_torrents = []
+        self.resumed_torrents = []
         self.closed = False
 
     async def create_magnet(self, magnet):
@@ -67,6 +69,12 @@ class FakeProvider:
 
     async def delete_queued(self, queued_id):
         self.deleted_queued.append(queued_id)
+
+    async def pause_torrent(self, remote_id):
+        self.paused_torrents.append(remote_id)
+
+    async def resume_torrent(self, remote_id):
+        self.resumed_torrents.append(remote_id)
 
     async def close(self):
         self.closed = True
@@ -189,7 +197,9 @@ async def test_dashboard_login_and_settings_save(tmp_path):
             valid = await client.post("/ui/login", data={"username": "user", "password": "pass"},
                                       follow_redirects=False)
             assert valid.status_code == 303 and "SID=" in valid.headers["set-cookie"]
+            csrf = app.state.auth_sessions.csrf(client.cookies.get("SID"))
             response = await client.post("/ui/settings", data={
+                "csrf_token": csrf,
                 "torbox_token": "replacement-secret",
                 "transfer_mode": "parallel",
                 "connections": "12",
@@ -456,6 +466,130 @@ async def test_delete_cancels_and_awaits_active_delivery(tmp_path):
         assert await app.state.job_service.job(HASH) is None
 
 
+async def test_qb_pause_resume_aliases_and_provider_scope(tmp_path):
+    async with client_for(tmp_path) as (client, app, provider):
+        await login(client)
+        await client.post("/api/v2/torrents/add", data={"urls": MAGNET})
+        job = (await app.state.job_service.jobs())[0]
+        await app.state.job_service.process(job.id)
+
+        response = await client.post("/api/v2/torrents/stop", data={"hashes": HASH.upper()})
+        assert response.status_code == 200
+        paused = await app.state.job_service.job(HASH)
+        assert paused.control_state == ControlState.PAUSED.value
+        assert paused.control_scope == "local_and_provider"
+        assert provider.paused_torrents == [42]
+        info = (await client.get("/api/v2/torrents/info", params={"hashes": HASH})).json()[0]
+        assert info["state"] == "pausedDL" and info["dlspeed"] == 0
+        assert await app.state.job_service.due_job_ids() == []
+
+        assert (await client.post("/api/v2/torrents/start",
+                                  data={"hashes": f"unknown|{HASH}"})).status_code == 200
+        assert (await app.state.job_service.job(HASH)).control_state == ControlState.RUNNING.value
+        assert provider.resumed_torrents == [42]
+        assert (await client.post("/api/v2/torrents/resume",
+                                  data={"hashes": "all"})).status_code == 200
+        assert provider.resumed_torrents == [42]
+        snapshot = (await client.get("/api/v2/sync/maindata")).json()
+        assert snapshot["full_update"] is True and HASH in snapshot["torrents"]
+
+
+async def test_pause_active_delivery_preserves_partial_and_resumes(tmp_path):
+    class PausableDownloader:
+        def __init__(self):
+            self.started = asyncio.Event()
+            self.allow = asyncio.Event()
+            self.calls = 0
+
+        async def download(self, url_provider, destination, progress_callback=None):
+            self.calls += 1
+            await url_provider(False)
+            destination = Path(destination)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            part = destination.with_name(destination.name + ".downloadarr.part")
+            manifest = destination.with_name(destination.name + ".downloadarr.json")
+            part.write_bytes(b"he")
+            manifest.write_text('{"checkpoint":2}', encoding="utf-8")
+            self.started.set()
+            await self.allow.wait()
+            destination.write_bytes(b"hello")
+            return DownloadResult(destination, 5, 1, 5, self.calls > 1, False,
+                                  session_byte_count=3 if self.calls > 1 else 5)
+
+    provider, downloader = FakeProvider(), PausableDownloader()
+    provider.torrent = ProviderTorrent(42, HASH, "Test.Release", "cached", 5,
+                                       1, 0, 0, True, True)
+    async with client_for(tmp_path, provider, downloader) as (client, app, provider):
+        await login(client)
+        await client.post("/api/v2/torrents/add", data={"urls": MAGNET})
+        job = (await app.state.job_service.jobs())[0]
+        for _ in range(3):
+            await app.state.job_service.process(job.id)
+        processing = asyncio.create_task(app.state.job_service.process(job.id))
+        await downloader.started.wait()
+        assert (await client.post("/api/v2/torrents/pause",
+                                  data={"hashes": HASH})).status_code == 200
+        assert processing.done()
+        destination = tmp_path / "downloads" / "Test.Release.mkv"
+        assert destination.with_name(destination.name + ".downloadarr.part").read_bytes() == b"he"
+        assert destination.with_name(destination.name + ".downloadarr.json").exists()
+        assert await app.state.job_service.due_job_ids() == []
+        downloader.allow.set()
+        await client.post("/api/v2/torrents/resume", data={"hashes": HASH})
+        await app.state.job_service.process(job.id)
+        assert destination.read_bytes() == b"hello"
+        assert (await app.state.job_service.job(HASH)).state == JobState.COMPLETED.value
+        assert provider.creates == [MAGNET]
+
+
+async def test_paused_intent_survives_restart(tmp_path):
+    configured = settings(tmp_path)
+    first = create_app(configured, FakeProvider(), start_poller=False,
+                       downloader=FakeDownloader())
+    async with first.router.lifespan_context(first):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=first),
+                                     base_url="http://test") as client:
+            await login(client)
+            await client.post("/api/v2/torrents/add", data={"urls": MAGNET})
+            job = (await first.state.job_service.jobs())[0]
+            await first.state.job_service.process(job.id)
+            await first.state.job_service.pause([HASH])
+    second = create_app(configured, FakeProvider(), start_poller=False,
+                        downloader=FakeDownloader())
+    async with second.router.lifespan_context(second):
+        paused = await second.state.job_service.job(HASH)
+        assert paused.control_state == ControlState.PAUSED.value
+        assert await second.state.job_service.due_job_ids() == []
+
+
+async def test_removing_intent_retries_cleanup_after_provider_failure(tmp_path):
+    provider = FakeProvider()
+    failures = 0
+
+    async def flaky_delete(remote_id):
+        nonlocal failures
+        failures += 1
+        if failures == 1:
+            raise ProviderError("UPSTREAM_ERROR", "temporary cleanup failure", transient=True)
+        provider.deleted_torrents.append(remote_id)
+
+    provider.delete_torrent = flaky_delete
+    async with client_for(tmp_path, provider) as (client, app, provider):
+        await login(client)
+        await client.post("/api/v2/torrents/add", data={"urls": MAGNET})
+        job = (await app.state.job_service.jobs())[0]
+        await app.state.job_service.process(job.id)
+        response = await client.post("/api/v2/torrents/delete",
+                                     data={"hashes": HASH, "deleteFiles": "false"})
+        assert response.status_code == 400
+        removing = await app.state.job_service.job(HASH)
+        assert removing.control_state == ControlState.REMOVING.value
+        assert await app.state.job_service.due_job_ids() == [job.id]
+        await app.state.job_service.process(job.id)
+        assert await app.state.job_service.job(HASH) is None
+        assert provider.deleted_torrents == [42]
+
+
 async def test_delete_removes_queued_provider_submission(tmp_path):
     provider = FakeProvider()
 
@@ -654,7 +788,7 @@ async def test_transient_and_terminal_provider_failures(tmp_path):
         assert data["summary"]["failures"] == 2
         assert data["summary"]["unresolved_failures"] == 2
         assert data["recent_failures"][0]["code"] == "AUTHENTICATION_FAILED"
-        assert data["recent_failures"][0]["stage"] == "retry"
+        assert data["recent_failures"][0]["stage"] == "submission"
         await client.post("/api/v2/torrents/delete",
                           data={"hashes": HASH, "deleteFiles": "false"})
         retained = (await client.get("/ui/api/performance?range=all")).json()

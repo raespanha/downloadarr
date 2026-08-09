@@ -8,19 +8,22 @@ from ..settings import Settings
 
 class SessionStore:
     def __init__(self) -> None:
-        self._sessions: set[str] = set()
+        self._sessions: dict[str, str] = {}
 
     def create(self) -> str:
         value = secrets.token_urlsafe(32)
-        self._sessions.add(value)
+        self._sessions[value] = secrets.token_urlsafe(32)
         return value
 
     def valid(self, value: str | None) -> bool:
         return value is not None and value in self._sessions
 
+    def csrf(self, value: str | None) -> str | None:
+        return self._sessions.get(value) if value else None
+
     def remove(self, value: str | None) -> None:
         if value:
-            self._sessions.discard(value)
+            self._sessions.pop(value, None)
 
 
 async def require_auth(request: Request) -> None:

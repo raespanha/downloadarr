@@ -37,6 +37,7 @@ def create_app(settings: Settings | None = None, provider: TorrentProvider | Non
         job_service = JobService(database, actual_provider, poll_interval=configured.poll_interval,
                                  queued_poll_interval=configured.queued_poll_interval,
                                  max_backoff=configured.max_poll_backoff,
+                                 max_job_failures=configured.max_job_failures,
                                  download_path=configured.download_path,
                                  download_connections=min(configured.download.connections,
                                                           configured.download.provider_max_connections),

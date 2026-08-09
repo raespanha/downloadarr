@@ -1,6 +1,7 @@
 import asyncio
 import email.utils
 import inspect
+import json
 import os
 import time
 from collections import deque
@@ -17,6 +18,15 @@ from .manifest import Manifest
 from .probe import parse_content_range, probe
 from .state import ChunkState, DownloadResult, ProgressCallback, TransferProgress, UrlProvider
 from .writer import CheckpointWriter, PositionalWriter
+
+
+def _write_receipt(path: Path, value: dict) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with temporary.open("w", encoding="utf-8") as handle:
+        json.dump(value, handle, separators=(",", ":"), sort_keys=True)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, path)
 
 
 class _UrlManager:
@@ -108,11 +118,25 @@ class Downloader:
 
             if sum(c.downloaded for c in chunks) != info.size or part.stat().st_size != info.size:
                 raise ProtocolError("download completed without exactly the advertised byte count")
+            elapsed = time.monotonic() - started
+            session_bytes = info.size - initial_downloaded
+            average_speed = session_bytes / elapsed if elapsed else 0.0
+            connections = (max(1, min(self.config.connections, pending_chunks))
+                           if used_ranges.is_set() else 1)
+            _write_receipt(destination.with_name(
+                destination.name + ".downloadarr.receipt.json"), {
+                    "version": 1, "size": info.size, "identity": identity,
+                    "elapsed": elapsed, "session_bytes": session_bytes,
+                    "average_speed": average_speed,
+                    "peak_speed": max(speed_metrics["peak"], average_speed),
+                    "connections": connections, "used_ranges": used_ranges.is_set(),
+                    "range_requests": counters["range_requests"],
+                    "retry_count": counters["retries"], "resumed": resumed,
+                    "cdn_host": urlsplit(urls.current).hostname,
+                    "published_at": datetime.now(timezone.utc).isoformat(),
+                })
             os.replace(part, destination)
             manifest_path.unlink(missing_ok=True)
-        elapsed = time.monotonic() - started
-        session_bytes = info.size - initial_downloaded
-        average_speed = session_bytes / elapsed if elapsed else 0.0
         return DownloadResult(
             destination, info.size, elapsed, average_speed, resumed, used_ranges.is_set(),
             session_byte_count=session_bytes,
@@ -120,8 +144,7 @@ class Downloader:
             range_requests=counters["range_requests"],
             retry_count=counters["retries"],
             peak_speed=max(speed_metrics["peak"], average_speed),
-            connections=(max(1, min(self.config.connections, pending_chunks))
-                         if used_ranges.is_set() else 1),
+            connections=connections,
         )
 
     def _chunks(self, total: int, ranged: bool) -> list[ChunkState]:
