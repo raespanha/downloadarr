@@ -42,6 +42,7 @@
     .legend .peak { background:#36d399 }
     .legend .failures { height:8px; background:#ff6174 }
     .failure-count { color:#ff8c9a }
+    .alerts { display:grid; gap:8px; margin:12px 0 18px }.alert { padding:12px; border-left:4px solid #ffb020; border-radius:8px; background:#1b2027 }.alert.error { border-color:#ff6174 }.alert small { display:block; margin-top:5px; color:#91a2b5 }
     .segments { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:18px }
     .segment-card { padding:14px; border:1px solid #223140; border-radius:10px; background:#0d151e }
     .segment-card h3 { margin:0 0 10px; font-size:14px }
@@ -65,6 +66,13 @@
     <div class="metric"><span>Completed (selected period)</span><strong id="completed-count">0</strong></div>
   </section>
   <section id="jobs" class="jobs"><div class="empty">Loading downloads&hellip;</div></section>
+  <section class="performance" aria-labelledby="monitor-title">
+    <div class="section-head"><div><h2 id="monitor-title">Operational health</h2><p>Observed Downloadarr phases, cleanup, retries, and deduplicated incidents.</p></div><div><a class="button" href="/ui/api/export?dataset=lifecycle&format=json&range=30d">Export JSON</a> <a class="button" href="/ui/api/export?dataset=lifecycle&format=csv&range=30d">Export CSV</a></div></div>
+    <div class="performance-summary"><div class="metric"><span>Open incidents</span><strong id="monitor-open">0</strong></div><div class="metric"><span>Lifecycle events</span><strong id="monitor-events">0</strong></div><div class="metric"><span>Evaluator</span><strong id="monitor-heartbeat">Checking</strong></div><div class="metric"><span>Timing</span><strong>Observed wall</strong></div></div>
+    <div id="monitor-alerts" class="alerts"></div>
+    <div class="history"><h3>Observed time by phase</h3><table><thead><tr><th>Phase</th><th>Samples</th><th>Transitions</th><th>Average wall time</th></tr></thead><tbody id="phase-rows"></tbody></table></div>
+    <div class="history"><h3>Recent lifecycle</h3><table><thead><tr><th>When</th><th>Service</th><th>Indexer</th><th>Event</th><th>Transition</th><th>Outcome</th></tr></thead><tbody id="lifecycle-rows"></tbody></table></div>
+  </section>
   <section class="performance" aria-labelledby="performance-title">
     <div class="section-head">
       <div><h2 id="performance-title">Transfer performance</h2><p>Historical CDN delivery speed retained after Arr imports and cleanup.</p></div>
@@ -83,7 +91,7 @@
       <div class="metric"><span>Peak</span><strong id="history-peak">0 B/s</strong></div>
       <div class="metric"><span>Delivered</span><strong id="history-bytes">0 B</strong></div>
       <div class="metric"><span>Retries</span><strong id="history-retries">0</strong></div>
-      <div class="metric"><span>Failures</span><strong class="failure-count" id="history-failures">0</strong></div>
+      <div class="metric"><span>Failure/retry events</span><strong class="failure-count" id="history-failures">0</strong></div>
       <div class="metric"><span>Unresolved</span><strong class="failure-count" id="history-unresolved">0</strong></div>
     </div>
     <div class="chart-wrap"><canvas id="performance-chart" role="img" aria-label="Average and peak transfer speeds over time"></canvas></div>
@@ -100,6 +108,8 @@
       <label>Transfer mode<select name="transfer_mode"><option value="auto" {% if settings.download.transfer_mode == 'auto' %}selected{% endif %}>Auto</option><option value="parallel" {% if settings.download.transfer_mode == 'parallel' %}selected{% endif %}>Parallel</option><option value="sequential" {% if settings.download.transfer_mode == 'sequential' %}selected{% endif %}>Sequential</option></select></label>
       <label>Connections<input name="connections" type="number" min="1" max="256" value="{{ settings.download.connections }}" required></label>
       <label>Provider connection ceiling<input name="provider_max_connections" type="number" min="1" max="256" value="{{ settings.download.provider_max_connections }}" required></label>
+      <label>Telemetry retention days (0 = unlimited)<input name="retention_days" type="number" min="0" max="3650" value="{{ settings.telemetry.retention_days }}" required></label>
+      <label>Maximum export rows<input name="export_max_rows" type="number" min="100" max="50000" value="{{ settings.telemetry.export_max_rows }}" required></label>
       <label class="wide">Default download path<input name="download_path" value="{{ settings.download.path }}" required></label>
       <label>Sonarr URL<input name="sonarr_url" type="url" value="{{ settings.integrations.sonarr.url }}" placeholder="http://sonarr:8989"></label>
       <label>Sonarr category<input name="sonarr_category" value="{{ settings.integrations.sonarr.category }}" required></label>
@@ -136,6 +146,8 @@ function render(values){
   document.querySelector('#updated').textContent='Updated '+new Date().toLocaleTimeString();
 }
 async function refresh(){try{const response=await fetch('/ui/api/jobs');if(response.status===403){location='/ui/login';return}render(await response.json())}catch(e){document.querySelector('#updated').textContent='Connection lost'}}
+function fmtDuration(value){if(value==null)return 'Insufficient history';if(value<60)return value.toFixed(1)+' s';if(value<3600)return (value/60).toFixed(1)+' min';return (value/3600).toFixed(1)+' h'}
+async function loadMonitoring(){try{const response=await fetch('/ui/api/monitoring?range=30d');if(!response.ok)throw new Error('monitor request failed');const data=await response.json();document.querySelector('#monitor-open').textContent=data.summary.open_incidents;document.querySelector('#monitor-events').textContent=data.summary.events;document.querySelector('#monitor-heartbeat').textContent=data.monitor.stale?'Stale':'Healthy';const alerts=document.querySelector('#monitor-alerts');alerts.replaceChildren();for(const item of data.alerts.filter(v=>v.status!=='resolved')){const node=document.createElement('div');node.className='alert '+item.severity;const strong=document.createElement('strong');strong.textContent=item.summary;const small=document.createElement('small');small.textContent=`${item.service} · ${item.indexer} · ${item.action} · seen ${item.occurrences} times`;node.append(strong,small);if(item.status==='open'){const form=document.createElement('form');form.method='post';form.action=`/ui/alerts/${item.id}/acknowledge`;form.innerHTML='<input type="hidden" name="csrf_token"><button>Acknowledge</button>';form.querySelector('input').value=csrfToken;node.append(form)}alerts.append(node)}if(!alerts.children.length)alerts.textContent='No open incidents.';const phases=document.querySelector('#phase-rows');phases.replaceChildren();for(const item of data.phases){const row=phases.insertRow();[item.phase,item.samples,item.transitions,fmtDuration(item.average_wall_seconds)].forEach(value=>{const cell=row.insertCell();cell.textContent=value})}const events=document.querySelector('#lifecycle-rows');events.replaceChildren();for(const item of data.recent_events){const row=events.insertRow();[new Date(item.occurred_at).toLocaleString(),item.service,item.indexer,item.event_type,(item.from_phase||'—')+' → '+(item.to_phase||'—'),item.outcome].forEach(value=>{const cell=row.insertCell();cell.textContent=value})}}catch(e){document.querySelector('#monitor-heartbeat').textContent='Unavailable'}}
 let selectedRange='7d',selectedService='all',selectedIndexer='all',chartValues=[];
 function drawChart(values){
   chartValues=values;const canvas=document.querySelector('#performance-chart'),ctx=canvas.getContext('2d'),width=canvas.clientWidth,height=canvas.clientHeight,dpr=window.devicePixelRatio||1;
@@ -161,6 +173,6 @@ function renderHistory(data){
 async function loadPerformance(range=selectedRange){selectedRange=range;document.querySelectorAll('[data-range]').forEach(b=>b.classList.toggle('active',b.dataset.range===range));try{const query=new URLSearchParams({range,service:selectedService,indexer:selectedIndexer});const response=await fetch('/ui/api/performance?'+query);if(response.status===403){location='/ui/login';return}if(!response.ok)throw new Error('performance request failed');renderHistory(await response.json())}catch(e){document.querySelector('#history-rows').innerHTML='<tr><td colspan="9">Performance history is unavailable.</td></tr>'}}
 document.querySelectorAll('[data-range]').forEach(button=>button.addEventListener('click',()=>loadPerformance(button.dataset.range)));window.addEventListener('resize',()=>drawChart(chartValues));
 document.querySelector('#service-filter').addEventListener('change',event=>{selectedService=event.target.value;loadPerformance()});document.querySelector('#indexer-filter').addEventListener('change',event=>{selectedIndexer=event.target.value;loadPerformance()});
-refresh();loadPerformance();setInterval(refresh,2000);setInterval(()=>loadPerformance(),30000);
+refresh();loadMonitoring();loadPerformance();setInterval(refresh,2000);setInterval(loadMonitoring,30000);setInterval(()=>loadPerformance(),30000);
 </script>
 </body></html>

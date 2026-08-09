@@ -56,10 +56,10 @@ Transient events are marked recovered after a later successful processing
 cycle; terminal failures remain open for monitoring. These records deliberately
 survive Arr cleanup, just like successful transfer history.
 
-SQLite history is retained indefinitely for now. Each
-row is small, and indexes cover time-range and info-hash lookups. A configurable
-retention policy can be added if long-running installations accumulate enough
-history to justify one.
+SQLite history is retained indefinitely by default. `telemetry.retention_days`
+can enable bounded retention, and `/ui/api/retention` previews the next batch.
+Active jobs, unresolved evidence, and open incidents are protected. See
+`lifecycle-monitoring.md` for exact timing, alert, export, and retention semantics.
 
 ## Source attribution
 

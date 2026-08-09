@@ -151,6 +151,25 @@ class SchedulerSettings(BaseModel):
         return value
 
 
+class TelemetrySettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    retention_days: int = 0
+    export_max_rows: int = 5000
+
+    @field_validator("retention_days")
+    @classmethod
+    def valid_retention(cls, value: int) -> int:
+        if value != 0 and not 30 <= value <= 3650:
+            raise ValueError("retention_days must be 0 or between 30 and 3650")
+        return value
+
+    @field_validator("export_max_rows")
+    @classmethod
+    def valid_export_limit(cls, value: int) -> int:
+        if not 100 <= value <= 50000:
+            raise ValueError("export_max_rows must be between 100 and 50000")
+        return value
+
 class Settings(BaseModel):
     """Versioned, backup-friendly application configuration."""
 
@@ -162,6 +181,7 @@ class Settings(BaseModel):
     torbox: TorBoxSettings = Field(default_factory=TorBoxSettings)
     integrations: IntegrationsSettings = Field(default_factory=IntegrationsSettings)
     scheduler: SchedulerSettings = Field(default_factory=SchedulerSettings)
+    telemetry: TelemetrySettings = Field(default_factory=TelemetrySettings)
 
     @field_validator("schema_version")
     @classmethod
@@ -270,6 +290,8 @@ ENVIRONMENT_OVERRIDES: dict[str, tuple[str, ...]] = {
     "DOWNLOADARR_QUEUED_POLL_INTERVAL": ("scheduler", "queued_poll_interval"),
     "DOWNLOADARR_MAX_POLL_BACKOFF": ("scheduler", "max_poll_backoff"),
     "DOWNLOADARR_MAX_JOB_FAILURES": ("scheduler", "max_job_failures"),
+    "DOWNLOADARR_TELEMETRY_RETENTION_DAYS": ("telemetry", "retention_days"),
+    "DOWNLOADARR_EXPORT_MAX_ROWS": ("telemetry", "export_max_rows"),
 }
 
 

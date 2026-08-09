@@ -239,3 +239,9 @@ system permissions and encrypt backups at the storage layer.
 
 Advanced deployments can keep secrets out of JSON entirely through environment
 variables or future Docker secret-file support.
+
+## Telemetry settings
+
+`telemetry.retention_days` is `0` by default, which keeps history indefinitely. A nonzero value must
+be 30–3650 days. `telemetry.export_max_rows` bounds authenticated JSON/CSV exports. Environment
+overrides are `DOWNLOADARR_TELEMETRY_RETENTION_DAYS` and `DOWNLOADARR_EXPORT_MAX_ROWS`.

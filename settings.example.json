@@ -43,5 +43,9 @@
     "queued_poll_interval": 30,
     "max_poll_backoff": 300,
     "max_job_failures": 5
+  },
+  "telemetry": {
+    "retention_days": 0,
+    "export_max_rows": 5000
   }
 }

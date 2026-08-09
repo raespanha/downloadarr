@@ -73,6 +73,9 @@ class Job(Base):
     remove_delete_files: Mapped[bool] = mapped_column(Integer, default=False)
     remote_cleanup_done: Mapped[bool] = mapped_column(Integer, default=False)
     local_cleanup_done: Mapped[bool] = mapped_column(Integer, default=False)
+    phase_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    transition_generation: Mapped[int] = mapped_column(Integer, default=0)
+    cleanup_failures: Mapped[int] = mapped_column(Integer, default=0)
     category: Mapped[Category | None] = relationship(lazy="joined")
     provider_job: Mapped["ProviderJob | None"] = relationship(back_populates="job", lazy="joined",
                                                                cascade="all, delete-orphan")
@@ -180,3 +183,61 @@ class ControlEvent(Base):
     outcome: Mapped[str] = mapped_column(String(32))
     detail: Mapped[str | None] = mapped_column(Text)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class LifecycleEvent(Base):
+    __tablename__ = "lifecycle_events"
+    sequence: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_id: Mapped[str] = mapped_column(String(36), unique=True,
+                                          default=lambda: str(uuid.uuid4()))
+    event_key: Mapped[str] = mapped_column(String(128), unique=True)
+    job_id: Mapped[str] = mapped_column(String(36), index=True)
+    generation: Mapped[int] = mapped_column(Integer)
+    info_hash: Mapped[str] = mapped_column(String(40))
+    name: Mapped[str] = mapped_column(Text)
+    category: Mapped[str] = mapped_column(String(255), default="")
+    service: Mapped[str] = mapped_column(String(32), default="other")
+    indexer: Mapped[str] = mapped_column(String(255), default="Unknown")
+    indexer_id: Mapped[int | None] = mapped_column(Integer)
+    provider: Mapped[str] = mapped_column(String(32), default="torbox")
+    event_type: Mapped[str] = mapped_column(String(32))
+    from_phase: Mapped[str | None] = mapped_column(String(32))
+    to_phase: Mapped[str | None] = mapped_column(String(32))
+    outcome: Mapped[str] = mapped_column(String(32))
+    code: Mapped[str | None] = mapped_column(String(64))
+    detail: Mapped[str | None] = mapped_column(Text)
+    progress: Mapped[float] = mapped_column(Float, default=0.0)
+    bytes_downloaded: Mapped[int] = mapped_column(Integer, default=0)
+    duration_seconds: Mapped[float | None] = mapped_column(Float)
+    partial_history: Mapped[bool] = mapped_column(Integer, default=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AlertInstance(Base):
+    __tablename__ = "alert_instances"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True,
+                                    default=lambda: str(uuid.uuid4()))
+    fingerprint: Mapped[str] = mapped_column(String(255), unique=True)
+    rule: Mapped[str] = mapped_column(String(64))
+    severity: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(16), default="open")
+    job_id: Mapped[str | None] = mapped_column(String(36))
+    info_hash: Mapped[str | None] = mapped_column(String(40))
+    service: Mapped[str] = mapped_column(String(32), default="other")
+    indexer: Mapped[str] = mapped_column(String(255), default="Unknown")
+    summary: Mapped[str] = mapped_column(Text)
+    action: Mapped[str] = mapped_column(Text)
+    occurrences: Mapped[int] = mapped_column(Integer, default=1)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class MonitorStatus(Base):
+    __tablename__ = "monitor_status"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    last_evaluated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_pruned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)

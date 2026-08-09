@@ -45,6 +45,14 @@ def create_app(settings: Settings | None = None, provider: TorrentProvider | Non
                                  downloader=downloader, source_resolver=actual_resolver)
         for name, path in configured.download.categories.items():
             await job_service.ensure_category(name, path)
+        await job_service.bootstrap_lifecycle()
+        await job_service.evaluate_alerts()
+        if configured.telemetry.retention_days:
+            try:
+                await job_service.prune_telemetry(
+                    configured.telemetry.retention_days, dry_run=False)
+            except Exception:
+                logging.getLogger(__name__).exception("Telemetry retention pass failed")
         poller = JobPoller(job_service, configured.provider_concurrency)
         app.state.settings = configured
         app.state.settings_service = actual_settings_service

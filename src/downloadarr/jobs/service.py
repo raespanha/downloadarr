@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 
@@ -11,8 +12,9 @@ from sqlalchemy.exc import IntegrityError
 from ..config import DownloadConfig
 from ..arr_metadata import SourceResolver
 from ..db.engine import Database
-from ..db.models import (Category, ControlEvent, ControlState, DeliveryFile,
-                         FailureEvent, Job, JobState, ProviderJob, TransferHistory)
+from ..db.models import (AlertInstance, Category, ControlEvent, ControlState,
+                         DeliveryFile, FailureEvent, Job, JobState, LifecycleEvent,
+                         MonitorStatus, ProviderJob, TransferHistory)
 from ..downloader import Downloader
 from ..errors import DownloadError
 from ..magnets import MagnetInfo
@@ -71,6 +73,11 @@ class JobService:
             job.provider_job = ProviderJob(provider="torbox")
             session.add(job)
             try:
+                await session.flush()
+                now = _now()
+                job.phase_started_at = now
+                self._lifecycle(session, job, "accepted", event_key=f"accepted:{job.id}",
+                                from_phase=None, to_phase=job.state, occurred_at=now)
                 await session.commit()
             except IntegrityError:
                 await session.rollback()
@@ -145,10 +152,145 @@ class JobService:
         values.reverse()
         return values
 
+    async def bootstrap_lifecycle(self) -> None:
+        async with self.database.session() as session:
+            jobs = list((await session.scalars(select(Job).where(
+                Job.phase_started_at.is_(None)))).unique().all())
+            now = _now()
+            for job in jobs:
+                job.phase_started_at = now
+                self._lifecycle(session, job, "baseline_snapshot",
+                                event_key=f"baseline:{job.id}", from_phase=None,
+                                to_phase=job.state, occurred_at=now, partial_history=True,
+                                detail="Monitoring began after this job entered its current phase")
+            await session.commit()
+
+    async def lifecycle_history(self, since: datetime | None = None, *,
+                                service: str | None = None, indexer: str | None = None,
+                                limit: int = 500) -> list[LifecycleEvent]:
+        statement = select(LifecycleEvent)
+        if since is not None:
+            statement = statement.where(LifecycleEvent.occurred_at >= since)
+        if service:
+            statement = statement.where(LifecycleEvent.service == service)
+        if indexer:
+            statement = statement.where(LifecycleEvent.indexer == indexer)
+        statement = statement.order_by(LifecycleEvent.sequence.desc()).limit(min(limit, 5000))
+        async with self.database.session() as session:
+            values = list((await session.scalars(statement)).all())
+        values.reverse()
+        return values
+
+    async def alerts(self, limit: int = 200) -> list[AlertInstance]:
+        async with self.database.session() as session:
+            return list((await session.scalars(select(AlertInstance).order_by(
+                AlertInstance.last_seen_at.desc()).limit(min(limit, 1000)))).all())
+
+    async def monitor_status(self) -> MonitorStatus | None:
+        async with self.database.session() as session:
+            return await session.get(MonitorStatus, 1)
+
+    async def acknowledge_alert(self, alert_id: str) -> bool:
+        async with self.database.session() as session:
+            item = await session.get(AlertInstance, alert_id)
+            if item is None or item.status == "resolved":
+                return False
+            item.status, item.acknowledged_at = "acknowledged", _now()
+            await session.commit()
+            return True
+
+    async def prune_telemetry(self, retention_days: int, *, dry_run: bool = True) -> dict:
+        if retention_days <= 0:
+            return {"enabled": False, "dry_run": dry_run, "rows": {}}
+        cutoff = _now() - timedelta(days=retention_days)
+        predicates = {
+            "lifecycle_events": and_(LifecycleEvent.occurred_at < cutoff,
+                                     LifecycleEvent.job_id.not_in(select(Job.id))),
+            "control_events": and_(ControlEvent.occurred_at < cutoff,
+                                   ControlEvent.job_id.not_in(select(Job.id))),
+            "transfer_history": TransferHistory.completed_at < cutoff,
+            "failure_events": and_(FailureEvent.resolved_at.is_not(None),
+                                   FailureEvent.resolved_at < cutoff),
+            "alert_instances": and_(AlertInstance.status == "resolved",
+                                    AlertInstance.resolved_at < cutoff),
+        }
+        models = {"lifecycle_events": LifecycleEvent, "control_events": ControlEvent,
+                  "transfer_history": TransferHistory, "failure_events": FailureEvent,
+                  "alert_instances": AlertInstance}
+        counts = {}
+        async with self.database.session() as session:
+            for name, predicate in predicates.items():
+                ids = list((await session.scalars(select(models[name]).where(
+                    predicate).limit(1000))).all())
+                counts[name] = len(ids)
+                if not dry_run and ids:
+                    for item in ids:
+                        await session.delete(item)
+            status = await session.get(MonitorStatus, 1)
+            if not dry_run and status:
+                status.last_pruned_at = _now()
+            if not dry_run:
+                await session.commit()
+        return {"enabled": True, "dry_run": dry_run,
+                "cutoff": cutoff.isoformat(), "batch_limit": 1000, "rows": counts}
+
+    async def evaluate_alerts(self) -> None:
+        now = _now()
+        async with self.database.session() as session:
+            jobs = list((await session.scalars(select(Job))).unique().all())
+            active: dict[str, tuple[Job, str, str, str]] = {}
+            for job in jobs:
+                if job.control_state == ControlState.PAUSED.value:
+                    continue
+                if job.state == JobState.FAILED.value:
+                    active[f"terminal_failure:{job.id}"] = (
+                        job, "error", "Download failed terminally",
+                        "Review the latest failure and use Retry after correcting it.")
+                if (job.control_state == ControlState.REMOVING.value
+                        and job.cleanup_failures > 0):
+                    active[f"cleanup_stuck:{job.id}"] = (
+                        job, "error", "Cleanup is retrying",
+                        "Check TorBox connectivity and filesystem permissions.")
+                if job.control_error:
+                    active[f"control_warning:{job.id}"] = (
+                        job, "warning", "Provider control did not complete",
+                        "The local control is safe; inspect TorBox before retrying provider control.")
+                if job.state == JobState.RETRY_WAIT.value and job.poll_failures >= 3:
+                    active[f"repeated_failure:{job.id}"] = (
+                        job, "warning", "Download has repeated transient failures",
+                        "Inspect TorBox/CDN availability and the failure timeline.")
+            existing = {item.fingerprint: item for item in (await session.scalars(
+                select(AlertInstance))).all()}
+            for fingerprint, (job, severity, summary, action) in active.items():
+                item = existing.get(fingerprint)
+                if item is None:
+                    session.add(AlertInstance(
+                        fingerprint=fingerprint, rule=fingerprint.split(":", 1)[0],
+                        severity=severity, status="open", job_id=job.id,
+                        info_hash=job.info_hash, service=job.source_service,
+                        indexer=job.source_indexer or "Unknown", summary=summary,
+                        action=action, occurrences=1, first_seen_at=now,
+                        last_seen_at=now))
+                else:
+                    item.last_seen_at = now
+                    item.occurrences += 1
+                    if item.status == "resolved":
+                        item.status, item.resolved_at = "open", None
+            for fingerprint, item in existing.items():
+                if fingerprint not in active and item.status != "resolved":
+                    item.status, item.resolved_at = "resolved", now
+            status = await session.get(MonitorStatus, 1)
+            if status is None:
+                status = MonitorStatus(id=1)
+                session.add(status)
+            status.last_evaluated_at, status.last_error = now, None
+            await session.commit()
+
     async def due_job_ids(self, limit: int = 100) -> list[str]:
         terminal = [JobState.COMPLETED.value, JobState.FAILED.value]
         statement = (select(Job.id).where(
-                    or_(Job.control_state == ControlState.REMOVING.value,
+                    or_(and_(Job.control_state == ControlState.REMOVING.value,
+                             or_(Job.next_poll_at.is_(None), Job.next_poll_at <= _now())),
                         and_(Job.control_state == ControlState.RUNNING.value,
                              Job.state.not_in(terminal),
                              or_(Job.next_poll_at.is_(None), Job.next_poll_at <= _now()))))
@@ -177,7 +319,23 @@ class JobService:
             if job is None:
                 return
             if job.control_state == ControlState.REMOVING.value:
-                await self._cleanup_removing(job, session)
+                try:
+                    await self._cleanup_removing(job, session)
+                except (ProviderError, OSError) as error:
+                    job.cleanup_failures += 1
+                    job.error_code = getattr(error, "code", "CLEANUP_FAILED")
+                    job.error_message = str(error)[:512]
+                    delay = min(max(5.0, self.poll_interval)
+                                * (2 ** (job.cleanup_failures - 1)), self.max_backoff)
+                    job.next_poll_at = _now() + timedelta(seconds=delay)
+                    self._lifecycle(
+                        session, job, "cleanup_failed",
+                        event_key=f"cleanup_failed:{job.id}:{job.cleanup_failures}",
+                        from_phase=job.state, to_phase=job.state, outcome="retry_scheduled",
+                        code=job.error_code, detail=str(error))
+                    self._record_failure(session, job, "cleanup", job.error_code,
+                                         str(error), True)
+                    await session.commit()
                 return
             if (job.control_state != ControlState.RUNNING.value
                     or job.state in (JobState.COMPLETED.value, JobState.FAILED.value)):
@@ -188,14 +346,14 @@ class JobService:
                 await self._enrich_source(job, session)
                 if job.provider_job.remote_id is not None:
                     if job.delivery_files:
-                        job.state = JobState.DELIVERING.value
+                        self._transition(session, job, JobState.DELIVERING.value)
                         await self._deliver(job, session)
                     elif job.state == JobState.PROVIDER_READY.value:
-                        await self._prepare_delivery(job)
+                        await self._prepare_delivery(job, session)
                     else:
-                        await self._poll_remote(job)
+                        await self._poll_remote(job, session)
                 elif job.provider_job.queued_id is not None:
-                    await self._poll_queued(job)
+                    await self._poll_queued(job, session)
                 else:
                     await self._submit(job, session)
                 job.poll_failures = 0
@@ -215,12 +373,16 @@ class JobService:
                     # network/5xx failure stays ambiguous and is reconciled.
                     job.provider_job.provider_state = "submit_retry"
                 if error.transient and job.poll_failures < self.max_job_failures:
-                    job.state = JobState.RETRY_WAIT.value
+                    self._transition(session, job, JobState.RETRY_WAIT.value,
+                                     outcome="retry_scheduled", code=error.code,
+                                     detail=str(error))
                     delay = getattr(error, "retry_after", None) or min(
                         self.poll_interval * (2 ** (job.poll_failures - 1)), self.max_backoff)
                     job.next_poll_at = _now() + timedelta(seconds=delay)
                 else:
-                    job.state = JobState.FAILED.value
+                    self._transition(session, job, JobState.FAILED.value,
+                                     outcome="terminal_failure", code=error.code,
+                                     detail=str(error))
                     job.next_poll_at = None
                 self._record_failure(session, job, failure_stage, error.code,
                                      str(error), error.transient)
@@ -228,17 +390,25 @@ class JobService:
                 job.poll_failures += 1
                 job.error_code, job.error_message = "DOWNLOAD_FAILED", str(error)[:512]
                 if job.poll_failures < self.max_job_failures:
-                    job.state = JobState.RETRY_WAIT.value
+                    self._transition(session, job, JobState.RETRY_WAIT.value,
+                                     outcome="retry_scheduled", code="DOWNLOAD_FAILED",
+                                     detail=str(error))
                     job.next_poll_at = _now() + timedelta(seconds=min(
                         self.poll_interval * (2 ** (job.poll_failures - 1)), self.max_backoff))
                 else:
-                    job.state, job.next_poll_at = JobState.FAILED.value, None
+                    self._transition(session, job, JobState.FAILED.value,
+                                     outcome="retry_exhausted", code="DOWNLOAD_FAILED",
+                                     detail=str(error))
+                    job.next_poll_at = None
                 self._record_failure(session, job, failure_stage, "DOWNLOAD_FAILED",
                                      str(error), True)
             except (OSError, ValueError) as error:
                 job.poll_failures += 1
                 job.error_code, job.error_message = "DELIVERY_FAILED", str(error)[:512]
-                job.state, job.next_poll_at = JobState.FAILED.value, None
+                self._transition(session, job, JobState.FAILED.value,
+                                 outcome="terminal_failure", code="DELIVERY_FAILED",
+                                 detail=str(error))
+                job.next_poll_at = None
                 self._record_failure(session, job, failure_stage, "DELIVERY_FAILED",
                                      str(error), False)
             await session.commit()
@@ -261,6 +431,15 @@ class JobService:
                 FailureEvent.job_id == job.id,
                 FailureEvent.indexer == "Unknown",
             ).values(indexer=metadata.indexer))
+            await session.execute(update(ControlEvent).where(
+                ControlEvent.job_id == job.id,
+                ControlEvent.indexer == "Unknown",
+            ).values(indexer=metadata.indexer, service=metadata.service))
+            await session.execute(update(LifecycleEvent).where(
+                LifecycleEvent.job_id == job.id,
+                LifecycleEvent.indexer == "Unknown",
+            ).values(indexer=metadata.indexer, indexer_id=metadata.indexer_id,
+                     service=metadata.service))
 
     def _record_failure(self, session, job: Job, stage: str, code: str,
                         message: str, transient: bool) -> None:
@@ -277,7 +456,8 @@ class JobService:
             error_message=safe_message,
             transient=transient,
             attempt=job.poll_failures,
-            bytes_downloaded=sum(item.downloaded for item in job.delivery_files),
+            bytes_downloaded=sum(item.downloaded for item in
+                                 job.__dict__.get("delivery_files", [])),
             occurred_at=_now(),
         )
         session.add(event)
@@ -288,6 +468,49 @@ class JobService:
             event.attempt, event.transient, event.bytes_downloaded, safe_message,
         )
 
+    def _lifecycle(self, session, job: Job, event_type: str, *, event_key: str,
+                   from_phase: str | None = None, to_phase: str | None = None,
+                   outcome: str = "recorded", code: str | None = None,
+                   detail: str | None = None, duration: float | None = None,
+                   occurred_at: datetime | None = None,
+                   partial_history: bool = False) -> None:
+        safe_detail = _safe_detail(detail)
+        session.add(LifecycleEvent(
+            event_key=event_key[:128], job_id=job.id,
+            generation=job.transition_generation, info_hash=job.info_hash,
+            name=job.name or job.info_hash,
+            category=job.category.name if job.category else "",
+            service=job.source_service, indexer=job.source_indexer or "Unknown",
+            indexer_id=job.source_indexer_id,
+            provider=job.provider_job.provider if job.provider_job else "torbox",
+            event_type=event_type[:32], from_phase=from_phase, to_phase=to_phase,
+            outcome=outcome[:32], code=code[:64] if code else None,
+            detail=safe_detail, progress=min(max(job.progress, 0), 1),
+            bytes_downloaded=sum(item.downloaded for item in
+                                 job.__dict__.get("delivery_files", [])),
+            duration_seconds=max(duration, 0) if duration is not None else None,
+            partial_history=partial_history, occurred_at=occurred_at or _now(),
+            recorded_at=_now()))
+
+    def _transition(self, session, job: Job, new_state: str, *,
+                    outcome: str = "entered", code: str | None = None,
+                    detail: str | None = None) -> bool:
+        if job.state == new_state:
+            return False
+        now = _now()
+        duration = ((now - _aware(job.phase_started_at)).total_seconds()
+                    if job.phase_started_at is not None else None)
+        old_state = job.state
+        job.transition_generation += 1
+        job.state, job.phase_started_at = new_state, now
+        self._lifecycle(
+            session, job, "phase_transition",
+            event_key=f"transition:{job.id}:{job.transition_generation}",
+            from_phase=old_state, to_phase=new_state, outcome=outcome,
+            code=code, detail=detail, duration=duration, occurred_at=now,
+            partial_history=duration is None)
+        return True
+
     async def _submit(self, job: Job, session) -> None:
         # Persist intent before the provider side effect. If the process dies
         # after TorBox accepts but before its ID is committed, restart can bind
@@ -296,16 +519,16 @@ class JobService:
             existing = await self.provider.find_torrent(job.info_hash)
             if existing is not None:
                 job.provider_job.remote_id = existing.remote_id
-                self._apply_torrent(job, existing)
+                self._apply_torrent(job, existing, session)
                 return
             queued = next((item for item in await self.provider.get_queued()
                            if item.info_hash == job.info_hash), None)
             if queued is not None:
                 job.provider_job.remote_id = queued.remote_id
                 job.provider_job.queued_id = queued.queued_id
-                job.state = (JobState.PROVIDER_DOWNLOADING.value
-                             if queued.remote_id is not None
-                             else JobState.PROVIDER_QUEUED.value)
+                self._transition(session, job, (JobState.PROVIDER_DOWNLOADING.value
+                                 if queued.remote_id is not None
+                                 else JobState.PROVIDER_QUEUED.value))
                 job.next_poll_at = _now() + timedelta(seconds=self.poll_interval)
                 return
         else:
@@ -321,44 +544,46 @@ class JobService:
         job.provider_job.remote_id = submission.remote_id
         job.provider_job.queued_id = submission.queued_id
         job.provider_job.provider_state = "submitted"
-        job.state = (JobState.PROVIDER_QUEUED.value if submission.remote_id is None
-                     else JobState.PROVIDER_DOWNLOADING.value)
+        self._transition(session, job, (JobState.PROVIDER_QUEUED.value
+                         if submission.remote_id is None
+                         else JobState.PROVIDER_DOWNLOADING.value))
         job.next_poll_at = _now() + timedelta(seconds=self.poll_interval)
 
-    async def _poll_queued(self, job: Job) -> None:
+    async def _poll_queued(self, job: Job, session) -> None:
         queued = await self.provider.get_queued()
         match = next((item for item in queued if item.queued_id == job.provider_job.queued_id
                       or item.info_hash == job.info_hash), None)
         if match and match.remote_id is not None:
             job.provider_job.remote_id = match.remote_id
-            job.state = JobState.PROVIDER_DOWNLOADING.value
+            self._transition(session, job, JobState.PROVIDER_DOWNLOADING.value)
             job.next_poll_at = _now() + timedelta(seconds=self.poll_interval)
         else:
             torrent = await self.provider.find_torrent(job.info_hash)
             if torrent is not None:
                 job.provider_job.remote_id = torrent.remote_id
-                self._apply_torrent(job, torrent)
+                self._apply_torrent(job, torrent, session)
             else:
-                job.state = JobState.PROVIDER_QUEUED.value
+                self._transition(session, job, JobState.PROVIDER_QUEUED.value)
                 job.next_poll_at = _now() + timedelta(seconds=self.queued_poll_interval)
 
-    async def _poll_remote(self, job: Job) -> None:
+    async def _poll_remote(self, job: Job, session) -> None:
         torrent = await self.provider.get_torrent(job.provider_job.remote_id)
-        self._apply_torrent(job, torrent)
+        self._apply_torrent(job, torrent, session)
 
-    def _apply_torrent(self, job: Job, torrent) -> None:
+    def _apply_torrent(self, job: Job, torrent, session) -> None:
         job.name, job.size = torrent.name, torrent.size
         job.progress, job.download_speed, job.eta = torrent.progress, torrent.download_speed, torrent.eta
         job.provider_job.provider_state = torrent.state
         job.provider_job.last_polled_at = _now()
         job.provider_job.payload = json.dumps({"download_present": torrent.download_present})
         if torrent.download_finished and torrent.download_present:
-            job.state, job.progress, job.next_poll_at = JobState.PROVIDER_READY.value, 0.0, _now()
+            self._transition(session, job, JobState.PROVIDER_READY.value)
+            job.progress, job.next_poll_at = 0.0, _now()
         else:
-            job.state = JobState.PROVIDER_DOWNLOADING.value
+            self._transition(session, job, JobState.PROVIDER_DOWNLOADING.value)
             job.next_poll_at = _now() + timedelta(seconds=self.poll_interval)
 
-    async def _prepare_delivery(self, job: Job) -> None:
+    async def _prepare_delivery(self, job: Job, session) -> None:
         files = await self.provider.get_files(job.provider_job.remote_id)
         if not job.delivery_files:
             relative_paths = _delivery_paths(job.name or job.info_hash, files)
@@ -370,7 +595,8 @@ class JobService:
         job.progress = (sum(item.downloaded for item in job.delivery_files) / job.size
                         if job.size else 1.0)
         job.download_speed, job.eta = 0, None
-        job.state, job.next_poll_at = JobState.DELIVERING.value, _now()
+        self._transition(session, job, JobState.DELIVERING.value)
+        job.next_poll_at = _now()
 
     async def _deliver(self, job: Job, session) -> None:
         await self._enrich_source(job, session, force=True)
@@ -468,7 +694,10 @@ class JobService:
                 result.connections, result.used_ranges, result.range_requests,
                 result.retry_count, result.resumed, result.cdn_host or "unknown",
             )
-        job.state, job.progress = JobState.COMPLETED.value, 1.0
+        self._transition(session, job, JobState.COMPLETED.value,
+                         outcome="awaiting_client_cleanup",
+                         detail="Local delivery complete; Arr import is not yet verified")
+        job.progress = 1.0
         job.download_speed, job.eta = 0, 0
         job.completed_at, job.next_poll_at = _now(), None
 
@@ -532,10 +761,17 @@ class JobService:
                         job.control_state = ControlState.RUNNING.value
                         job.poll_failures = 0
                         job.error_code = job.error_message = None
-                        job.state = _retry_state(job)
+                        self._transition(session, job, _retry_state(job),
+                                         outcome="manual_retry")
                         job.next_poll_at = _now()
                     self._audit(session, job, command, actor, before, job.control_state,
                                 "accepted", detail)
+                    self._lifecycle(
+                        session, job, f"control_{command}",
+                        event_key=f"control:{command}:{job.id}:{uuid.uuid4().hex}",
+                        from_phase=job.state, to_phase=job.state, outcome="accepted",
+                        detail=("Local control; provider scope is reported separately"
+                                if command in {"pause", "resume"} else None))
                 await session.commit()
             for job_id, remote_id in remote_actions:
                 await self._provider_control(job_id, remote_id, command)
@@ -595,12 +831,18 @@ class JobService:
                     job.next_poll_at = _now()
                     self._audit(session, job, "remove", actor, before,
                                 ControlState.REMOVING.value, "accepted")
+                    if before != ControlState.REMOVING.value:
+                        self._lifecycle(
+                            session, job, "cleanup_requested",
+                            event_key=f"cleanup_requested:{job.id}",
+                            from_phase=job.state, to_phase=job.state,
+                            outcome="client_cleanup_requested",
+                            detail="qBittorrent client requested cleanup; Arr import is unverified")
                 await session.commit()
+            async with self._task_lock:
+                self._controlling.difference_update(job_ids)
             for job_id in job_ids:
-                async with self.database.session() as session:
-                    job = await session.get(Job, job_id)
-                    if job is not None:
-                        await self._cleanup_removing(job, session)
+                await self.process(job_id)
         finally:
             async with self._task_lock:
                 self._controlling.difference_update(job_ids)
@@ -618,13 +860,27 @@ class JobService:
 
     async def _cleanup_removing(self, job: Job, session) -> None:
         if not job.remote_cleanup_done:
+            self._lifecycle(session, job, "remote_cleanup_attempt",
+                            event_key=f"remote_cleanup_attempt:{job.id}:{uuid.uuid4().hex}",
+                            from_phase=job.state, to_phase=job.state,
+                            outcome="attempted")
+            await session.commit()
             if job.provider_job.remote_id is not None:
                 await self.provider.delete_torrent(job.provider_job.remote_id)
             elif job.provider_job.queued_id is not None:
                 await self.provider.delete_queued(job.provider_job.queued_id)
             job.remote_cleanup_done = True
+            self._lifecycle(session, job, "remote_cleanup_succeeded",
+                            event_key=f"remote_cleanup_succeeded:{job.id}",
+                            from_phase=job.state, to_phase=job.state,
+                            outcome="succeeded")
             await session.commit()
         if job.remove_delete_files and not job.local_cleanup_done:
+            self._lifecycle(session, job, "local_cleanup_attempt",
+                            event_key=f"local_cleanup_attempt:{job.id}:{uuid.uuid4().hex}",
+                            from_phase=job.state, to_phase=job.state,
+                            outcome="attempted")
+            await session.commit()
             base = Path(job.category.save_path) if job.category else self.download_path
             for item in job.delivery_files:
                 destination = _safe_destination(base, item.relative_path)
@@ -634,7 +890,15 @@ class JobService:
                 destination.with_name(destination.name + ".downloadarr.receipt.json").unlink(missing_ok=True)
                 _remove_empty_parents(destination.parent, base.resolve())
             job.local_cleanup_done = True
+            self._lifecycle(session, job, "local_cleanup_succeeded",
+                            event_key=f"local_cleanup_succeeded:{job.id}",
+                            from_phase=job.state, to_phase=job.state,
+                            outcome="succeeded")
             await session.commit()
+        self._lifecycle(session, job, "job_removed",
+                        event_key=f"job_removed:{job.id}", from_phase=job.state,
+                        to_phase=None, outcome="cleanup_completed",
+                        detail="Operational job removed after client cleanup request")
         await session.delete(job)
         await session.commit()
 
@@ -690,6 +954,16 @@ def _receipt_result(path: Path, destination: Path, expected_size: int) -> Downlo
         )
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
         return None
+
+
+def _safe_detail(value: str | None) -> str | None:
+    if not value:
+        return None
+    lowered = value.lower()
+    if ("http://" in lowered or "https://" in lowered or "token=" in lowered
+            or "authorization" in lowered or "api_key" in lowered):
+        return "Sensitive detail was redacted"
+    return value[:512]
 
 
 def _delivery_paths(torrent_name: str, files) -> list[str]:

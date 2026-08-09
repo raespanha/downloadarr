@@ -161,5 +161,67 @@ CREATE TABLE control_events (
 );
 CREATE INDEX idx_control_events_hash ON control_events(info_hash);
 CREATE INDEX idx_control_events_occurred_at ON control_events(occurred_at);
+""",
+    8: """
+ALTER TABLE jobs ADD COLUMN phase_started_at DATETIME;
+ALTER TABLE jobs ADD COLUMN transition_generation INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE jobs ADD COLUMN cleanup_failures INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE lifecycle_events (
+    sequence INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    event_id VARCHAR(36) NOT NULL UNIQUE,
+    event_key VARCHAR(128) NOT NULL UNIQUE,
+    job_id VARCHAR(36) NOT NULL,
+    generation INTEGER NOT NULL,
+    info_hash VARCHAR(40) NOT NULL,
+    name TEXT NOT NULL,
+    category VARCHAR(255) NOT NULL,
+    service VARCHAR(32) NOT NULL,
+    indexer VARCHAR(255) NOT NULL,
+    indexer_id INTEGER,
+    provider VARCHAR(32) NOT NULL,
+    event_type VARCHAR(32) NOT NULL,
+    from_phase VARCHAR(32),
+    to_phase VARCHAR(32),
+    outcome VARCHAR(32) NOT NULL,
+    code VARCHAR(64),
+    detail TEXT,
+    progress FLOAT NOT NULL,
+    bytes_downloaded INTEGER NOT NULL,
+    duration_seconds FLOAT,
+    partial_history INTEGER NOT NULL,
+    occurred_at DATETIME NOT NULL,
+    recorded_at DATETIME NOT NULL
+);
+CREATE INDEX idx_lifecycle_job_sequence ON lifecycle_events(job_id, sequence);
+CREATE INDEX idx_lifecycle_occurred_service ON lifecycle_events(occurred_at, service);
+CREATE INDEX idx_lifecycle_occurred_indexer ON lifecycle_events(occurred_at, indexer);
+CREATE INDEX idx_lifecycle_type_occurred ON lifecycle_events(event_type, occurred_at);
+CREATE TABLE alert_instances (
+    id VARCHAR(36) NOT NULL PRIMARY KEY,
+    fingerprint VARCHAR(255) NOT NULL UNIQUE,
+    rule VARCHAR(64) NOT NULL,
+    severity VARCHAR(16) NOT NULL,
+    status VARCHAR(16) NOT NULL,
+    job_id VARCHAR(36),
+    info_hash VARCHAR(40),
+    service VARCHAR(32) NOT NULL,
+    indexer VARCHAR(255) NOT NULL,
+    summary TEXT NOT NULL,
+    action TEXT NOT NULL,
+    occurrences INTEGER NOT NULL,
+    first_seen_at DATETIME NOT NULL,
+    last_seen_at DATETIME NOT NULL,
+    acknowledged_at DATETIME,
+    resolved_at DATETIME
+);
+CREATE INDEX idx_alert_status_last_seen ON alert_instances(status, last_seen_at);
+CREATE INDEX idx_alert_service_last_seen ON alert_instances(service, last_seen_at);
+CREATE TABLE monitor_status (
+    id INTEGER NOT NULL PRIMARY KEY,
+    last_evaluated_at DATETIME,
+    last_pruned_at DATETIME,
+    last_error TEXT
+);
+INSERT INTO monitor_status(id) VALUES (1);
 """
 }

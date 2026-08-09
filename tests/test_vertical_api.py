@@ -371,8 +371,9 @@ async def test_performance_history_survives_arr_cleanup(tmp_path):
         assert values["summary"] == {
             "downloads": 1, "files": 1, "bytes": 5,
             "average_speed": 200, "peak_speed": 350, "retries": 1,
+            "median_speed": 200, "p95_speed": 200, "sample_files": 1,
             "range_transfers": 1, "resumed": 0,
-            "failures": 0, "unresolved_failures": 0,
+            "failures": 0, "failure_events": 0, "unresolved_failures": 0,
             "affected_downloads": 0,
         }
         assert values["timeline"][0]["average_speed"] == 200
@@ -581,10 +582,15 @@ async def test_removing_intent_retries_cleanup_after_provider_failure(tmp_path):
         await app.state.job_service.process(job.id)
         response = await client.post("/api/v2/torrents/delete",
                                      data={"hashes": HASH, "deleteFiles": "false"})
-        assert response.status_code == 400
+        assert response.status_code == 200
         removing = await app.state.job_service.job(HASH)
         assert removing.control_state == ControlState.REMOVING.value
-        assert await app.state.job_service.due_job_ids() == [job.id]
+        assert removing.cleanup_failures == 1
+        assert await app.state.job_service.due_job_ids() == []
+        events = await app.state.job_service.lifecycle_history()
+        assert any(item.event_type == "cleanup_failed" for item in events)
+        await app.state.job_service.evaluate_alerts()
+        assert (await app.state.job_service.alerts())[0].rule == "cleanup_stuck"
         await app.state.job_service.process(job.id)
         assert await app.state.job_service.job(HASH) is None
         assert provider.deleted_torrents == [42]
@@ -816,6 +822,95 @@ async def test_transient_failure_is_marked_recovered_after_success(tmp_path):
         await app.state.job_service.process(job.id)
         failure = (await app.state.job_service.failure_history())[0]
         assert failure.resolved_at is not None
+
+
+async def test_lifecycle_transitions_are_ordered_deduplicated_and_survive_cleanup(tmp_path):
+    provider, downloader = FakeProvider(), FakeDownloader()
+    async with client_for(tmp_path, provider, downloader) as (client, app, provider):
+        await login(client)
+        await client.post("/api/v2/torrents/add", data={"urls": MAGNET})
+        job = (await app.state.job_service.jobs())[0]
+        await app.state.job_service.process(job.id)
+        await app.state.job_service.process(job.id)
+        before = await app.state.job_service.lifecycle_history()
+        transitions = [item for item in before if item.event_type == "phase_transition"]
+        assert [(item.from_phase, item.to_phase) for item in transitions] == [
+            (JobState.SUBMITTED.value, JobState.PROVIDER_DOWNLOADING.value)]
+
+        provider.torrent = ProviderTorrent(42, HASH, "Test.Release", "cached", 5,
+                                           1, 0, 0, True, True)
+        for _ in range(3):
+            await app.state.job_service.process(job.id)
+        completed = await app.state.job_service.lifecycle_history()
+        assert [item.sequence for item in completed] == sorted(item.sequence for item in completed)
+        assert all(item.duration_seconds is None or item.duration_seconds >= 0
+                   for item in completed)
+        assert any(item.to_phase == JobState.COMPLETED.value
+                   and item.outcome == "awaiting_client_cleanup" for item in completed)
+
+        await client.post("/api/v2/torrents/delete",
+                          data={"hashes": HASH, "deleteFiles": "false"})
+        assert await app.state.job_service.job(HASH) is None
+        retained = await app.state.job_service.lifecycle_history()
+        kinds = [item.event_type for item in retained]
+        assert "cleanup_requested" in kinds
+        assert "remote_cleanup_succeeded" in kinds
+        assert kinds[-1] == "job_removed"
+
+
+async def test_monitor_alert_dedup_acknowledge_and_resolve(tmp_path):
+    provider = FakeProvider()
+
+    async def terminal(magnet):
+        raise ProviderError("AUTHENTICATION_FAILED", "authentication failed", transient=False)
+
+    provider.create_magnet = terminal
+    async with client_for(tmp_path, provider) as (client, app, provider):
+        await login(client)
+        await client.post("/api/v2/torrents/add", data={"urls": MAGNET})
+        job = (await app.state.job_service.jobs())[0]
+        await app.state.job_service.process(job.id)
+        await app.state.job_service.evaluate_alerts()
+        await app.state.job_service.evaluate_alerts()
+        alerts = await app.state.job_service.alerts()
+        assert len(alerts) == 1 and alerts[0].rule == "terminal_failure"
+        assert alerts[0].occurrences == 2
+        assert await app.state.job_service.acknowledge_alert(alerts[0].id)
+        assert (await app.state.job_service.alerts())[0].status == "acknowledged"
+
+        provider.create_magnet = FakeProvider().create_magnet
+        await app.state.job_service.retry([HASH])
+        await app.state.job_service.process(job.id)
+        await app.state.job_service.evaluate_alerts()
+        assert (await app.state.job_service.alerts())[0].status == "resolved"
+        report = (await client.get("/ui/api/monitoring?range=30d")).json()
+        assert report["schema_version"] == 1
+        assert report["monitor"]["stale"] is False
+        assert report["semantics"]["cleanup"].endswith("unverified")
+
+
+async def test_telemetry_exports_are_bounded_redacted_and_formula_safe(tmp_path):
+    formula_hash = "1123456789abcdef0123456789abcdef01234567"
+    formula_magnet = f"magnet:?xt=urn:btih:{formula_hash}&dn=%3DCMD"
+    async with client_for(tmp_path) as (client, app, provider):
+        assert (await client.get("/ui/api/export")).status_code == 403
+        await login(client)
+        await client.post("/api/v2/torrents/add", data={"urls": formula_magnet})
+        redacted = await client.get(
+            "/ui/api/export?dataset=lifecycle&format=json&range=all")
+        assert redacted.status_code == 200
+        assert redacted.headers["cache-control"] == "no-store"
+        assert redacted.headers["x-content-type-options"] == "nosniff"
+        payload = redacted.json()
+        assert payload["schema_version"] == 1
+        assert "info_hash" not in payload["rows"][0]
+        assert formula_hash not in redacted.text
+
+        exported = await client.get(
+            "/ui/api/export?dataset=lifecycle&format=csv&range=all&include_identifiers=true")
+        assert exported.status_code == 200
+        assert "'=CMD" in exported.text
+        assert "token=" not in exported.text.lower()
 
 
 def test_settings_redact_secrets(tmp_path):
