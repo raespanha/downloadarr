@@ -4,39 +4,44 @@
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Downloadarr</title>
   <style>
-    :root { color-scheme:dark; font-family:Inter,system-ui,sans-serif; background:#0b1016; color:#ecf2f8; }
+    :root { color-scheme:dark; font-family:Inter,system-ui,sans-serif; background:#0b1016; color:#ecf2f8; --surface:#111923; --border:#263443; --muted:#91a2b5; --accent:#36d399; }
     * { box-sizing:border-box } body { margin:0; background:#0b1016; }
     header { position:sticky; top:0; z-index:2; display:flex; align-items:center; justify-content:space-between; padding:18px max(24px,4vw); border-bottom:1px solid #263443; background:#0f161fef; backdrop-filter:blur(12px); }
     h1 { margin:0; font-size:24px; letter-spacing:-.5px } .accent { color:#36d399 }
-    main { max-width:1400px; margin:auto; padding:28px max(20px,4vw) 60px; }
-    .toolbar { display:flex; gap:10px; align-items:center } button,.button { border:0; border-radius:8px; padding:9px 13px; background:#253545; color:#eef5fb; font-weight:700; cursor:pointer; text-decoration:none; }
-    button.danger { background:#46262d; color:#ff9ca8 } button.primary { background:#36d399; color:#062319 }
+    main { max-width:1400px; margin:auto; padding:32px max(20px,4vw) 72px; }
+    .toolbar { display:flex; gap:12px; align-items:center } button,.button { min-height:40px; border:1px solid transparent; border-radius:9px; padding:9px 14px; background:#253545; color:#eef5fb; font:inherit; font-weight:700; cursor:pointer; text-decoration:none; transition:background .15s,border-color .15s,transform .15s; }
+    button:hover,.button:hover { background:#304458 } button:active,.button:active { transform:translateY(1px) } button:focus-visible,.button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,summary:focus-visible { outline:3px solid #24b9ff66; outline-offset:2px } button:disabled { cursor:wait; opacity:.6 }
+    button.danger { background:#46262d; color:#ff9ca8 } button.danger:hover { background:#5a2d36 } button.primary { background:#36d399; color:#062319 } button.primary:hover { background:#55dfad }
     .notice { padding:12px 15px; margin-bottom:18px; border-radius:9px; background:#143a31; color:#8ef0cc } .notice.error { background:#40232b; color:#ff9ca8 }
     .summary { display:grid; grid-template-columns:repeat(4,minmax(120px,1fr)); gap:12px; margin-bottom:20px; }
     .metric,.card { border:1px solid #263443; border-radius:12px; background:#111923; }
     .metric { padding:16px } .metric span { display:block; color:#8497aa; font-size:12px; text-transform:uppercase; letter-spacing:.08em } .metric strong { display:block; margin-top:5px; font-size:22px; }
-    .jobs { display:grid; gap:12px } .card { padding:18px; }
-    .tab-nav { display:flex; gap:6px; margin-bottom:22px; padding:5px; width:max-content; max-width:100%; border:1px solid #263443; border-radius:11px; background:#111923 }
+    .jobs { display:grid; gap:16px } .card { padding:20px; box-shadow:0 10px 30px #00000014; }
+    .tab-nav { display:flex; gap:7px; margin-bottom:28px; padding:5px; width:max-content; max-width:100%; overflow-x:auto; border:1px solid #263443; border-radius:12px; background:#111923 }
     .tab-nav button { color:#91a2b5; background:transparent } .tab-nav button.active { color:#062319; background:#36d399 }
     .tab-panel[hidden] { display:none }
-    .job-head { display:flex; justify-content:space-between; gap:16px; align-items:flex-start } .job-title { margin:0; font-size:17px; overflow-wrap:anywhere }
-    .meta { display:flex; flex-wrap:wrap; gap:8px 16px; color:#91a2b5; font-size:13px; margin-top:8px }
+    .job-head { display:flex; justify-content:space-between; gap:20px; align-items:flex-start } .job-title { margin:0; font-size:17px; line-height:1.35; overflow-wrap:anywhere }
+    .meta { display:flex; flex-wrap:wrap; gap:8px 18px; color:#91a2b5; font-size:13px; margin-top:9px }
     .badge { padding:4px 8px; border-radius:99px; background:#233142; color:#b9c8d6; font-size:12px; white-space:nowrap } .badge.completed { background:#153a30;color:#7ee4bf } .badge.failed { background:#46262d;color:#ff9ca8 }
-    .progress { height:9px; margin:16px 0 8px; overflow:hidden; border-radius:99px; background:#273442 } .progress div { height:100%; background:linear-gradient(90deg,#24b9ff,#36d399); transition:width .4s }
-    .job-foot { display:flex; justify-content:space-between; gap:12px; align-items:center; color:#a4b3c1; font-size:13px } .job-actions form { display:inline }
-    .file-toggle { margin-top:14px; padding:7px 10px; background:#182532; color:#b8c8d7; font-size:12px }
-    .file-list { display:grid; gap:8px; margin-top:10px; padding-top:10px; border-top:1px solid #223140 }
-    .file-row { display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:7px 14px; align-items:center; color:#aebdca; font-size:12px }
+    .progress { height:9px; margin:18px 0 10px; overflow:hidden; border-radius:99px; background:#273442 } .progress div { height:100%; background:linear-gradient(90deg,#24b9ff,#36d399); transition:width .4s }
+    .job-foot { display:flex; justify-content:space-between; gap:16px 24px; align-items:center; color:#a4b3c1; font-size:13px } .status-line { min-width:0; line-height:1.45 } .job-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:9px } .job-actions form { display:block }
+    .job-actions button { min-height:36px; padding:7px 12px; font-size:12px }
+    .file-toggle { margin-top:16px; min-height:36px; padding:7px 11px; background:#182532; color:#b8c8d7; font-size:12px }
+    .file-toggle::after { content:'▾'; display:inline-block; margin-left:8px; transition:transform .15s } .file-toggle[aria-expanded="true"]::after { transform:rotate(180deg) }
+    .file-list { display:grid; gap:11px; margin-top:12px; padding:14px; border:1px solid #223140; border-radius:9px; background:#0d151e }
+    .file-list[hidden] { display:none }
+    .file-row { display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:8px 16px; align-items:center; color:#aebdca; font-size:12px }
     .file-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#e4edf5 }
     .file-state { text-transform:capitalize; color:#8497aa }
     .file-progress { grid-column:1/-1; height:5px; overflow:hidden; border-radius:99px; background:#273442 }
     .file-progress div { height:100%; background:#24b9ff; transition:width .4s }
-    details { margin-top:28px; border:1px solid #263443; border-radius:12px; background:#111923; } summary { cursor:pointer; padding:17px; font-weight:800 } .settings { padding:0 18px 20px; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
-    label { display:block; color:#aebdca; font-size:13px } input,select,textarea { width:100%; margin-top:6px; padding:10px; border:1px solid #34465a; border-radius:8px; background:#0b121a; color:#fff } textarea { min-height:120px; font-family:ui-monospace,monospace } .wide { grid-column:1/-1 }
+    .settings-card { padding:22px; border:1px solid #263443; border-radius:12px; background:#111923 } .settings { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px 20px; }
+    label { display:block; color:#aebdca; font-size:13px; font-weight:650 } label small { display:block; margin-top:7px; color:#7f92a5; font-weight:400; line-height:1.4 } input,select,textarea { width:100%; min-height:42px; margin-top:7px; padding:10px 11px; border:1px solid #34465a; border-radius:8px; background:#0b121a; color:#fff } textarea { min-height:130px; font-family:ui-monospace,monospace } .wide { grid-column:1/-1 }
     .empty { padding:40px; text-align:center; color:#8193a5; border:1px dashed #304153; border-radius:12px }
-    .performance { margin-top:28px; padding:20px; border:1px solid #263443; border-radius:12px; background:#111923 }
+    .performance { margin-top:24px; padding:22px; border:1px solid #263443; border-radius:12px; background:#111923 } #monitoring-view > .performance:first-child { margin-top:0 }
     .section-head { display:flex; justify-content:space-between; gap:16px; align-items:center; margin-bottom:18px }
     .section-head h2 { margin:0; font-size:19px } .section-head p { margin:4px 0 0; color:#8497aa; font-size:13px }
+    .section-actions { display:flex; flex-wrap:wrap; gap:10px }
     .performance-controls { display:flex; flex-wrap:wrap; gap:8px; align-items:flex-end }
     .performance-controls label { min-width:145px }
     .performance-controls select { margin-top:3px; padding:7px 30px 7px 9px }
@@ -52,7 +57,7 @@
     .legend .peak { background:#36d399 }
     .legend .failures { height:8px; background:#ff6174 }
     .failure-count { color:#ff8c9a }
-    .alerts { display:grid; gap:8px; margin:12px 0 18px }.alert { padding:12px; border-left:4px solid #ffb020; border-radius:8px; background:#1b2027 }.alert.error { border-color:#ff6174 }.alert small { display:block; margin-top:5px; color:#91a2b5 }
+    .alerts { display:grid; gap:10px; margin:12px 0 18px }.alert { padding:13px 14px; border-left:4px solid #ffb020; border-radius:8px; background:#1b2027 }.alert.error { border-color:#ff6174 }.alert small { display:block; margin-top:6px; color:#91a2b5; line-height:1.4 }.alert form { margin-top:10px }
     .segments { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:18px }
     .segment-card { padding:14px; border:1px solid #223140; border-radius:10px; background:#0d151e }
     .segment-card h3 { margin:0 0 10px; font-size:14px }
@@ -61,7 +66,7 @@
     .history { margin-top:22px; overflow-x:auto } .history h3 { margin:0 0 10px; font-size:15px }
     table { width:100%; border-collapse:collapse; font-size:13px } th,td { padding:10px 8px; border-bottom:1px solid #223140; text-align:left; white-space:nowrap }
     th { color:#8497aa; font-size:11px; letter-spacing:.06em; text-transform:uppercase } td:first-child { max-width:420px; overflow:hidden; text-overflow:ellipsis }
-    @media(max-width:700px){body{overflow-x:hidden}header{gap:10px;padding:16px 20px}header h1{font-size:21px}.toolbar #updated{display:none}.summary,.performance-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.settings,.segments{grid-template-columns:1fr}.wide{grid-column:auto}.job-head,.job-foot,.section-head{align-items:stretch;flex-direction:column}.range-picker{align-self:flex-start}.card{min-width:0}.job-actions{align-self:flex-end}.file-row{grid-template-columns:minmax(0,1fr) auto}.file-state{grid-column:1/-1}}
+    @media(max-width:700px){body{overflow-x:hidden}header{gap:12px;padding:15px 18px}header h1{font-size:21px}main{padding:22px 16px 56px}.toolbar #updated{display:none}.summary,.performance-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.settings,.segments{grid-template-columns:1fr}.wide{grid-column:auto}.job-head,.job-foot,.section-head{align-items:stretch;flex-direction:column}.job-head .badge{align-self:flex-start}.range-picker{align-self:flex-start}.card,.performance,.settings-card{min-width:0;padding:17px}.job-actions{align-self:stretch;justify-content:flex-start}.file-row{grid-template-columns:minmax(0,1fr) auto}.file-state{grid-column:1/-1}.tab-nav{display:grid;grid-template-columns:1fr 1.45fr 1fr;width:100%;overflow:visible}.tab-nav button{min-width:0;padding:8px 6px;white-space:nowrap;font-size:12px}.toolbar button{min-height:38px;padding:7px 10px}}
   </style>
 </head>
 <body>
@@ -81,7 +86,7 @@
   </section>
   <section id="monitoring-view" class="tab-panel" hidden>
   <section class="performance" aria-labelledby="monitor-title">
-    <div class="section-head"><div><h2 id="monitor-title">Operational health</h2><p>Observed Downloadarr phases, cleanup, retries, and deduplicated incidents.</p></div><div><a class="button" href="/ui/api/export?dataset=lifecycle&format=json&range=30d">Export JSON</a> <a class="button" href="/ui/api/export?dataset=lifecycle&format=csv&range=30d">Export CSV</a></div></div>
+    <div class="section-head"><div><h2 id="monitor-title">Operational health</h2><p>Observed Downloadarr phases, cleanup, retries, and deduplicated incidents.</p></div><div class="section-actions"><a class="button" href="/ui/api/export?dataset=lifecycle&format=json&range=30d">Export JSON</a><a class="button" href="/ui/api/export?dataset=lifecycle&format=csv&range=30d">Export CSV</a></div></div>
     <div class="performance-summary"><div class="metric"><span>Open incidents</span><strong id="monitor-open">0</strong></div><div class="metric"><span>Lifecycle events</span><strong id="monitor-events">0</strong></div><div class="metric"><span>Evaluator</span><strong id="monitor-heartbeat">Checking</strong></div><div class="metric"><span>Timing</span><strong>Observed wall</strong></div></div>
     <div id="monitor-alerts" class="alerts"></div>
     <div class="history"><h3>Observed time by phase</h3><table><thead><tr><th>Phase</th><th>Samples</th><th>Transitions</th><th>Average wall time</th></tr></thead><tbody id="phase-rows"></tbody></table></div>
@@ -117,8 +122,8 @@
   </section>
   </section>
   <section id="settings-view" class="tab-panel" hidden>
-  <details open>
-    <summary>Settings</summary>
+  <section class="settings-card" aria-labelledby="settings-title">
+    <div class="section-head"><div><h2 id="settings-title">Settings</h2><p>Download selection, provider connections, paths, and integrations.</p></div></div>
     <form class="settings" method="post" action="/ui/settings">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <label>TorBox token<input name="torbox_token" type="password" value="" placeholder="{% if settings.torbox.api_token %}Configured — leave blank to keep{% else %}Not configured{% endif %}" autocomplete="new-password"></label>
@@ -138,7 +143,7 @@
       <label class="wide">Categories (JSON)<textarea name="categories" spellcheck="false" required>{{ categories_json }}</textarea></label>
       <div class="wide"><button class="primary" type="submit">Save settings</button> <small>Environment-managed fields: {{ managed_fields|join(', ') or 'none' }}</small></div>
     </form>
-  </details>
+  </section>
   </section>
 </main>
 <script>
