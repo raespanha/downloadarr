@@ -157,3 +157,13 @@ Criar `Dockerfile`, adicionar serviço ao `docker-compose.yml` existente, testar
 ## Critério de sucesso
 
 Um download real via Sonarr, usando o nosso serviço, atinge velocidade agregada próxima da que já validámos manualmente (20-30MB/s+), e o Sonarr consegue detetar corretamente o progresso e importar o ficheiro automaticamente ao terminar — sem qualquer intervenção manual.
+
+## Estado atual (2026-08-09)
+
+- Fases 1–3: implementadas e cobertas por testes locais e integração real Sonarr/Radarr/TorBox.
+- Fase 4: dashboard, controlos operacionais, telemetria, incidentes e exportação implementados.
+- Fases 5–6: fluxo Arr validado e serviço Docker ativo; lock de processo, SQLite WAL durável,
+  readiness, backup/restore, doctor, imagem/dependências fixadas e Compose endurecido implementados.
+- Pendente antes de declarar produção estável: executar o benchmark e o ensaio de
+  backup/restore/rollback na VM Debian real em Proxmox, seguindo `docs/production-runbook.md` e
+  `docs/proxmox-benchmark.md`.

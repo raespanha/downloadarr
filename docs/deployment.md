@@ -1,5 +1,8 @@
 # Container Deployment
 
+For production use the full [production runbook](production-runbook.md) and hardened
+`compose.production.yml`. This page is the lightweight local-development setup.
+
 ## Image
 
 Downloadarr uses Python 3.12 and runs as the non-root user

@@ -70,8 +70,27 @@ async def _run(args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    commands = {"doctor", "backup", "backup-verify", "restore"}
+    maintenance_command = (arguments[0] if arguments and arguments[0] in commands else
+                           arguments[2] if len(arguments) >= 3 and arguments[0] == "--config"
+                           and arguments[2] in commands else None)
+    if maintenance_command:
+        from .maintenance import main as maintenance_main
+        if arguments[0] == "--config":
+            command = arguments.pop(2)
+        else:
+            command = arguments.pop(0)
+            if "--config" in arguments:
+                index = arguments.index("--config")
+                arguments = arguments[index:index + 2] + arguments[:index] + arguments[index + 2:]
+        if command == "backup-verify":
+            command = "verify"
+        if arguments[:1] == ["--config"]:
+            return maintenance_main([*arguments[:2], command, *arguments[2:]])
+        return maintenance_main([command, *arguments])
     try:
-        return asyncio.run(_run(parser().parse_args(argv)))
+        return asyncio.run(_run(parser().parse_args(arguments)))
     except (DownloadError, OSError, ValueError) as error:
         print(f"downloadarr: {error}", file=sys.stderr)
         return 1

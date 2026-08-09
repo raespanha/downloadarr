@@ -9,6 +9,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
+from .durability import fsync_directory
+
 
 class DatabaseSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -294,6 +296,12 @@ ENVIRONMENT_OVERRIDES: dict[str, tuple[str, ...]] = {
     "DOWNLOADARR_EXPORT_MAX_ROWS": ("telemetry", "export_max_rows"),
 }
 
+SECRET_FILE_OVERRIDES = {
+    f"{name}_FILE": path for name, path in ENVIRONMENT_OVERRIDES.items()
+    if name in {"DOWNLOADARR_PASSWORD", "DOWNLOADARR_API_KEY", "TORBOX_API_TOKEN",
+                "DOWNLOADARR_SONARR_API_KEY", "DOWNLOADARR_RADARR_API_KEY"}
+}
+
 
 def settings_path(path: str | os.PathLike[str] | None = None) -> Path:
     return Path(path or os.environ.get("DOWNLOADARR_CONFIG", "config/settings.json"))
@@ -311,6 +319,7 @@ def load_settings(path: str | os.PathLike[str] | None = None) -> Settings:
             raise ValueError(f"Downloadarr settings file must contain a JSON object: {configured_path}")
         values = _migrate_flat_settings(raw)
     _apply_environment(values)
+    _apply_secret_files(values)
     return Settings.model_validate(values)
 
 
@@ -330,8 +339,11 @@ class SettingsService:
             await asyncio.to_thread(self._save_sync, settings)
 
     def managed_fields(self) -> list[str]:
-        return [".".join(ENVIRONMENT_OVERRIDES[name]) for name in ENVIRONMENT_OVERRIDES
-                if name in os.environ]
+        direct = [".".join(path) for name, path in ENVIRONMENT_OVERRIDES.items()
+                  if name in os.environ]
+        files = [".".join(path) for name, path in SECRET_FILE_OVERRIDES.items()
+                 if name in os.environ]
+        return sorted(set(direct + files))
 
     def _save_sync(self, settings: Settings) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -339,6 +351,10 @@ class SettingsService:
             stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
             backup = self.path.with_name(f"{self.path.stem}.{stamp}.bak{self.path.suffix}")
             shutil.copy2(self.path, backup)
+            backups = sorted(self.path.parent.glob(
+                f"{self.path.stem}.*.bak{self.path.suffix}"), reverse=True)
+            for stale in backups[10:]:
+                stale.unlink(missing_ok=True)
         fd, name = tempfile.mkstemp(prefix=self.path.name + ".", suffix=".tmp",
                                     dir=self.path.parent)
         temporary = Path(name)
@@ -349,6 +365,7 @@ class SettingsService:
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temporary, self.path)
+            fsync_directory(self.path.parent)
         finally:
             temporary.unlink(missing_ok=True)
 
@@ -361,6 +378,24 @@ def _apply_environment(values: dict[str, Any]) -> None:
         for part in path[:-1]:
             target = target.setdefault(part, {})
         target[path[-1]] = os.environ[variable]
+
+
+def _apply_secret_files(values: dict[str, Any]) -> None:
+    for variable, path in SECRET_FILE_OVERRIDES.items():
+        file_name = os.environ.get(variable)
+        if not file_name:
+            continue
+        secret_path = Path(file_name)
+        try:
+            value = secret_path.read_text(encoding="utf-8").rstrip("\r\n")
+        except OSError as error:
+            raise ValueError(f"cannot read secret file for {variable}") from error
+        if not value:
+            raise ValueError(f"secret file for {variable} is empty")
+        target = values
+        for part in path[:-1]:
+            target = target.setdefault(part, {})
+        target[path[-1]] = value
 
 
 def _migrate_flat_settings(raw: dict[str, Any]) -> dict[str, Any]:

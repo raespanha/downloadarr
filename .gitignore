@@ -6,6 +6,7 @@ config/settings.*.bak.json
 config/settings.*.json
 config/*.db
 config/*.db-*
+config/*.lock
 __pycache__/
 *.py[cod]
 .pytest_cache/

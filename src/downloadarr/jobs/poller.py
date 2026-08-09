@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import time
 from contextlib import suppress
 
 from .service import JobService
@@ -28,23 +27,20 @@ class JobPoller:
             self._task = None
 
     async def run(self) -> None:
-        last_monitor = 0.0
         while not self._stop.is_set():
             ids = await self.service.due_job_ids()
             if ids:
                 async with asyncio.TaskGroup() as group:
                     for job_id in ids:
                         group.create_task(self._process(job_id))
-            if time.monotonic() - last_monitor >= 30:
-                try:
-                    await self.service.evaluate_alerts()
-                except Exception:
-                    logger.exception("Monitoring evaluation failed")
-                last_monitor = time.monotonic()
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=0.5)
             except TimeoutError:
                 pass
+
+    @property
+    def running(self) -> bool:
+        return self._task is not None and not self._task.done() and not self._stop.is_set()
 
     async def _process(self, job_id: str) -> None:
         async with self._semaphore:

@@ -26,6 +26,8 @@ test = ["pytest>=8.3", "pytest-asyncio>=0.24", "aiohttp>=3.10", "httpx>=0.28,<1"
 downloadarr = "downloadarr.cli:main"
 downloadarr-api = "downloadarr.api.app:main"
 downloadarr-verify-arr-cleanup = "downloadarr.arr_cleanup_test:main"
+downloadarr-maintenance = "downloadarr.maintenance:main"
+downloadarr-benchmark = "downloadarr.benchmark:main"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

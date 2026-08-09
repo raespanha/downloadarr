@@ -1,0 +1,42 @@
+services:
+  downloadarr:
+    image: ${DOWNLOADARR_IMAGE:?Set DOWNLOADARR_IMAGE to an immutable version or digest}
+    user: "${DOWNLOADARR_UID:-1000}:${DOWNLOADARR_GID:-1000}"
+    environment:
+      DOWNLOADARR_CONFIG: /config/settings.json
+      TORBOX_API_TOKEN_FILE: /run/secrets/torbox_api_token
+    secrets:
+      - torbox_api_token
+    ports:
+      - "${DOWNLOADARR_BIND:-127.0.0.1}:6500:6500"
+    volumes:
+      - ${DOWNLOADARR_CONFIG_PATH:?Set local config path}:/config:rw
+      - ${DOWNLOADARR_MEDIA_PATH:?Set shared Arr media path}:/torbox:rw
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    pids_limit: 256
+    mem_limit: ${DOWNLOADARR_MEMORY_LIMIT:-1g}
+    cpus: ${DOWNLOADARR_CPU_LIMIT:-2.0}
+    stop_grace_period: 120s
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:6500/readyz', timeout=3).read()"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+secrets:
+  torbox_api_token:
+    file: ${TORBOX_TOKEN_FILE:?Set TORBOX_TOKEN_FILE to a mode-0600 file}

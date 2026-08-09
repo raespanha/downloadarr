@@ -13,6 +13,7 @@ import aiofiles
 import aiohttp
 
 from .config import DownloadConfig
+from .durability import fsync_directory
 from .errors import DownloadError, HttpStatusError, ProtocolError, RetryExhausted
 from .manifest import Manifest
 from .probe import parse_content_range, probe
@@ -27,6 +28,7 @@ def _write_receipt(path: Path, value: dict) -> None:
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(temporary, path)
+    fsync_directory(path.parent)
 
 
 class _UrlManager:
@@ -136,7 +138,9 @@ class Downloader:
                     "published_at": datetime.now(timezone.utc).isoformat(),
                 })
             os.replace(part, destination)
+            fsync_directory(destination.parent)
             manifest_path.unlink(missing_ok=True)
+            fsync_directory(manifest_path.parent)
         return DownloadResult(
             destination, info.size, elapsed, average_speed, resumed, used_ranges.is_set(),
             session_byte_count=session_bytes,

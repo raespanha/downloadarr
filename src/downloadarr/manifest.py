@@ -5,6 +5,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from .durability import fsync_directory
 from .state import ChunkState
 
 
@@ -41,6 +42,7 @@ class Manifest:
             for attempt in range(5):
                 try:
                     os.replace(temp, self.path)
+                    fsync_directory(self.path.parent)
                     break
                 except PermissionError:
                     if attempt == 4:
