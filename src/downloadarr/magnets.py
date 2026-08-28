@@ -1,5 +1,4 @@
 import base64
-import re
 from dataclasses import dataclass
 from urllib.parse import parse_qs, unquote_plus, urlsplit
 
@@ -35,9 +34,11 @@ def parse_magnet(uri: str) -> MagnetInfo:
 
 
 def _normalize_hash(value: str) -> str:
-    if re.fullmatch(r"[0-9a-fA-F]{40}", value):
+    if len(value) == 40 and all(character in "0123456789abcdefABCDEF" for character in value):
         return value.lower()
-    if re.fullmatch(r"[A-Z2-7a-z2-7]{32}", value):
+    if len(value) == 32 and all(
+            character in "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567abcdefghijklmnopqrstuvwxyz"
+            for character in value):
         try:
             return base64.b32decode(value.upper()).hex()
         except ValueError as error:
