@@ -114,10 +114,34 @@ class DownloadSettings(BaseModel):
 class QBittorrentSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
     username: str = "downloadarr"
-    password: SecretStr = Field(default=SecretStr("downloadarr"), repr=False)
+    password: SecretStr = Field(repr=False)
     api_key: SecretStr | None = Field(default=None, repr=False)
     webapi_version: str = "2.8.1"
     application_version: str = "v4.3.9"
+
+    @field_validator("username")
+    @classmethod
+    def valid_username(cls, value: str) -> str:
+        value = value.strip()
+        if not value or len(value) > 255:
+            raise ValueError("qBittorrent username must be between 1 and 255 characters")
+        return value
+
+    @field_validator("password")
+    @classmethod
+    def valid_password(cls, value: SecretStr) -> SecretStr:
+        password = value.get_secret_value()
+        normalized = password.strip().lower()
+        placeholders = {
+            "downloadarr", "password", "changeme", "change-me", "secret",
+            "replace-with-a-strong-password",
+            "replace-with-a-unique-password-of-at-least-12-characters",
+        }
+        if len(password) < 12:
+            raise ValueError("qBittorrent password must contain at least 12 characters")
+        if normalized in placeholders or normalized.startswith("replace-with-"):
+            raise ValueError("qBittorrent password must not be a default or placeholder")
+        return value
 
 
 class TorBoxSettings(BaseModel):

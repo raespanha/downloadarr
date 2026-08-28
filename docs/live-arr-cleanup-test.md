@@ -1,30 +1,26 @@
-# Automated Arr Import and Cleanup Test
+# Automated Arr import and cleanup test
 
-This opt-in live test verifies the final Sonarr/Radarr integration boundary:
+This opt-in live verifier checks the final Sonarr/Radarr integration boundary:
 
-1. the target job exists in Downloadarr;
+1. the selected job exists in Downloadarr;
 2. Arr records `downloadFolderImported` for the same torrent info hash;
-3. Arr registers the imported episode or movie file with the expected size;
+3. Arr registers the imported file with the expected size;
 4. Arr removes the completed job through Downloadarr's qBittorrent facade; and
-5. when path maps are supplied, the library file remains while the staging path
-   has been removed.
+5. optional path maps confirm that the library file remains while staging is
+   removed.
 
-The test is passive. It never searches for, grabs, or submits a release. This
-keeps routine test runs and CI from downloading content or changing a media
-library. Use a small, explicitly approved legal media fixture that the selected
-Arr application can identify.
+The verifier is passive: it never searches for, grabs, or submits a release.
+Use a small, explicitly approved legal fixture. A genuine import changes
+external state, so this command is never run in normal tests or CI.
 
 ## Run it
 
-Install the package, then provide secrets through process-scoped environment
-variables. Do not put these values in Git, shell history, screenshots, or test
-reports.
-
-PowerShell example for Sonarr:
+Install the package and supply process-scoped environment variables. Keep real
+values out of Git, screenshots, shell history, and test reports.
 
 ```powershell
 $env:DOWNLOADARR_E2E_ARR_URL = "http://127.0.0.1:8989"
-$env:DOWNLOADARR_E2E_ARR_API_KEY = "<sonarr-api-key>"
+$env:DOWNLOADARR_E2E_ARR_API_KEY = "<arr-api-key>"
 $env:DOWNLOADARR_E2E_DOWNLOADARR_URL = "http://127.0.0.1:6500"
 $env:DOWNLOADARR_E2E_USERNAME = "<downloadarr-user>"
 $env:DOWNLOADARR_E2E_PASSWORD = "<downloadarr-password>"
@@ -33,119 +29,27 @@ downloadarr-verify-arr-cleanup `
   --arr sonarr `
   --hash <40-character-torrent-info-hash> `
   --timeout 7200 `
-  --path-map "/torbox=C:\torbox_media" `
-  --path-map "/series=C:\plex_media\series"
+  --path-map "/downloads=C:\media\downloads" `
+  --path-map "/series=C:\media\series"
 ```
 
-For Radarr, use `--arr radarr`, port `7878`, the Radarr API key, and the
-relevant staging/library maps, for example `/movies=C:\plex_media\movies`.
+For Radarr use `--arr radarr`, its URL/API key, and the relevant library map,
+for example `/movies=C:\media\movies`. Start the command as soon as the chosen
+release appears in Downloadarr.
 
-Start the command immediately after the chosen release appears in Downloadarr.
-The command exits successfully only after the complete import-and-cleanup
-contract has been observed. It exits nonzero on authentication errors, API
-errors, early removal, mismatched file records, missing mapped output, retained
-mapped staging data, or timeout.
+The command fails on authentication/API errors, early removal, mismatched file
+records, missing mapped output, retained staging data, or timeout. If the
+verifier must restart after import began, use a bounded `--lookback` value.
 
-If the verifier itself must be restarted after the import has already begun or
-completed, use `--lookback 900` (or another bounded number of seconds) so it may
-accept that recent Arr history event while it waits for Downloadarr cleanup.
+Without path maps it still proves Arr import history, the library database
+record, and removal from Downloadarr. With maps it additionally verifies host
+files.
 
-Path maps are optional. Without them, the verifier still proves Arr's import
-history, Arr's library database record, and removal from Downloadarr. With
-them, it additionally checks the physical host files.
+## Deterministic tests
 
-## Normal automated tests
+The ordinary suite uses fake Arr and Downloadarr clients to exercise the same
+state machine without network calls or external mutations:
 
-The ordinary test suite uses fake Arr and Downloadarr clients to exercise the
-same state machine without network access or external mutations:
-
-```powershell
-python -m pytest -q
+```bash
+PYTHONPATH=src python -m pytest -q
 ```
-
-These deterministic tests cover successful cleanup, cleanup before import,
-missing jobs, and physical library/staging validation. The live command remains
-opt-in because a genuine Arr import necessarily changes external state.
-
-## 2026-08-08 Sonarr cycle
-
-A complete S03E06 replacement cycle validated the command and the live stack:
-
-- the existing 8.23 GB Sonarr library file was removed;
-- two stale Downloadarr jobs, their TorBox torrent/queue items, and staging data
-  were removed;
-- Sonarr interactive search selected a different accepted cached torrent;
-- Downloadarr delivered exactly `6338119104` bytes at approximately
-  18.6 MiB/s without transfer retries;
-- Sonarr imported and registered the exact-size replacement as file ID 150;
-- Sonarr automatically called Downloadarr's completed-download removal path;
-- the Downloadarr job, TorBox remote torrent, Sonarr queue entry, and staging
-  directory were absent afterward; and
-- the replacement library file remained at exactly `6338119104` bytes.
-
-The cycle exposed and corrected three integration defects:
-
-1. `as_queued=true` forced every TorBox submission into its manual queue;
-2. missing zero seed limits prevented Sonarr from considering `pausedUP` debrid
-   jobs eligible for removal; and
-3. the live verifier used a lowercase history filter even though Sonarr's
-   qBittorrent download IDs and filter are uppercase/case-sensitive.
-
-## 2026-08-08 Radarr cycle
-
-The equivalent destructive replacement cycle also passed for Radarr using
-`The Lion King 1½ (2004)` as the smallest existing library target:
-
-- Radarr movie file ID 8 and its exact `807310164`-byte physical file were
-  removed while the monitored movie record remained intact;
-- an accepted 1080p replacement with info hash
-  `bb52d50d798d8b55994538cb73d9ae3cb22c943e` was grabbed through Radarr;
-- TorBox exposed the cached `1328822240`-byte torrent as remote ID `72413019`;
-- Downloadarr delivered both torrent files, reported `pausedUP`, and the live
-  verifier observed Radarr's import-and-cleanup contract after 154.9 seconds;
-- Radarr registered movie file ID 18 with the exact video size `1328716257`;
-- the Radarr queue, Downloadarr job, TorBox torrent, TorBox queue record, and
-  staging directory were all absent after cleanup; and
-- the imported library file remained on the host at exactly `1328716257`
-  bytes.
-
-This completes live Sonarr and Radarr coverage of the same automated verifier.
-
-## 2026-08-09 segmented telemetry cycles
-
-Fresh Sonarr and Radarr cycles validated service/indexer enrichment, persistent
-performance telemetry, physical import, and cleanup after migration 6.
-
-The Radarr cycle first exposed an important test-selection edge case: grabbing
-the exact info hash imported on the previous day caused Radarr to discard the
-duplicate-history queue item and request client cleanup without recording a new
-import. The verifier correctly failed instead of reporting success. The library
-was immediately restored with a different accepted hash. Future autonomous
-replacement selection must reject any hash already present in Arr import
-history.
-
-The valid Radarr recovery used hash
-`e54916d6f9ea762ef8f6ff9fbc209e660ec47cfb`:
-
-- the 524,940,512-byte video completed in 29.1 seconds at 18.04 MB/s average;
-- the peak was 20.22 MB/s, using four connections and 32 range requests;
-- retries remained zero and attribution was `radarr` / The Pirate Bay;
-- Radarr registered movie file ID 19; and
-- the Downloadarr job, staging tree, TorBox torrent, and TorBox queue item were
-  absent after import.
-
-The Sonarr cycle used an episode that was already missing locally, avoiding
-destruction of an existing library file. After removing its stale failed queue
-item, Sonarr grabbed hash `2e9c8dd33c6414f8f2c3c7bbeacf022f252b5b40`:
-
-- exactly 4,816,944,005 bytes completed at 17.48 MB/s average and 19.83 MB/s
-  peak;
-- the transfer used four connections with no retries and was attributed to
-  `sonarr` / The Pirate Bay;
-- Sonarr imported the exact-size result as episode file ID 151; and
-- Downloadarr staging and both possible TorBox records were removed while the
-  library file remained.
-
-The normal 91-test suite passed after the live cycles. It includes isolated
-transient and terminal provider failures, persistent failure records, recovery
-timestamps, Arr cleanup retention, and service/indexer dashboard filtering.

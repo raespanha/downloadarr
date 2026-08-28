@@ -26,8 +26,8 @@ COPY requirements.lock ./
 RUN python -m pip install --no-cache-dir --require-hashes -r requirements.lock
 COPY src ./src
 
-RUN mkdir -p /config /torbox \
-    && chown -R downloadarr:downloadarr /app /config /torbox
+RUN mkdir -p /config /downloads \
+    && chown -R downloadarr:downloadarr /app /config /downloads
 
 USER downloadarr
 EXPOSE 6500

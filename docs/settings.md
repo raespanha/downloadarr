@@ -77,7 +77,7 @@ Backing up `/config` preserves both settings and the SQLite database.
   },
   "qbittorrent": {
     "username": "downloadarr",
-    "password": "secret",
+    "password": "use-a-unique-password-here",
     "api_key": null,
     "webapi_version": "2.8.1",
     "application_version": "v4.3.9"
@@ -134,7 +134,7 @@ the image working directory and bypass the mounted `/config` directory.
 | Field | Type | Secret | Purpose |
 |---|---|---|---|
 | `username` | string | No | Sonarr/Radarr login username |
-| `password` | string | Yes | Sonarr/Radarr login password |
+| `password` | string | Yes | Required Sonarr/Radarr login password; at least 12 characters and not a known placeholder |
 | `api_key` | string/null | Yes | Optional bearer authentication key |
 | `webapi_version` | string | No | Advertised compatibility contract |
 | `application_version` | string | No | Advertised qBittorrent version |

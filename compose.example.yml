@@ -10,7 +10,7 @@ services:
       - "${DOWNLOADARR_BIND:-127.0.0.1}:6500:6500"
     volumes:
       - ./config:/config
-      - ${DOWNLOADARR_MEDIA_PATH:-./data}:/torbox
+      - ${DOWNLOADARR_MEDIA_PATH:-./data}:/downloads
     init: true
     read_only: true
     tmpfs:

@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 import asyncio
 import hashlib
+import json
 from pathlib import Path
 
 import httpx
@@ -118,7 +119,7 @@ def settings(tmp_path: Path) -> Settings:
     return Settings.model_validate({
         "database": {"url": f"sqlite+aiosqlite:///{tmp_path / 'jobs.db'}"},
         "download": {"path": tmp_path / "downloads"},
-        "qbittorrent": {"username": "user", "password": "pass"},
+        "qbittorrent": {"username": "user", "password": "test-password-123!"},
         "torbox": {"api_token": "test"},
         "scheduler": {"poll_interval": 0.01, "queued_poll_interval": 0.01},
     })
@@ -137,7 +138,8 @@ async def client_for(tmp_path, provider=None, downloader=None, source_resolver=N
 
 
 async def login(client):
-    response = await client.post("/api/v2/auth/login", data={"username": "user", "password": "pass"})
+    response = await client.post(
+        "/api/v2/auth/login", data={"username": "user", "password": "test-password-123!"})
     assert response.status_code == 200 and response.text == "Ok."
 
 
@@ -237,7 +239,7 @@ async def test_dashboard_login_and_settings_save(tmp_path):
             invalid = await client.post("/ui/login", data={"username": "user", "password": "bad"},
                                         follow_redirects=False)
             assert invalid.headers["location"].endswith("error=invalid")
-            valid = await client.post("/ui/login", data={"username": "user", "password": "pass"},
+            valid = await client.post("/ui/login", data={"username": "user", "password": "test-password-123!"},
                                       follow_redirects=False)
             assert valid.status_code == 303 and "SID=" in valid.headers["set-cookie"]
             csrf = app.state.auth_sessions.csrf(client.cookies.get("SID"))
@@ -1086,7 +1088,8 @@ def test_settings_redact_secrets(tmp_path):
 
 def test_json_settings_with_environment_override(tmp_path, monkeypatch):
     path = tmp_path / "settings.json"
-    path.write_text('{"username":"from-file","torbox_api_token":"file-secret",'
+    path.write_text('{"username":"from-file","password":"file-password-123",'
+                    '"torbox_api_token":"file-secret",'
                     '"provider_concurrency":2}', encoding="utf-8")
     monkeypatch.setenv("DOWNLOADARR_USERNAME", "from-environment")
     monkeypatch.setenv("DOWNLOADARR_RADARR_API_KEY", "radarr-environment-secret")
@@ -1104,13 +1107,32 @@ def test_invalid_json_settings_are_rejected(tmp_path):
         load_settings(path)
 
 
+@pytest.mark.parametrize("password", [
+    "downloadarr",
+    "replace-with-a-strong-password",
+    "short",
+])
+def test_insecure_qbittorrent_passwords_are_rejected(tmp_path, monkeypatch, password):
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"qbittorrent": {"password": password}}), encoding="utf-8")
+    monkeypatch.delenv("DOWNLOADARR_PASSWORD", raising=False)
+    with pytest.raises(ValueError, match="qBittorrent password"):
+        load_settings(path)
+
+
+def test_qbittorrent_password_is_required(tmp_path, monkeypatch):
+    monkeypatch.delenv("DOWNLOADARR_PASSWORD", raising=False)
+    with pytest.raises(ValueError, match="password"):
+        load_settings(tmp_path / "missing-settings.json")
+
+
 async def test_settings_service_saves_atomically_and_creates_backup(tmp_path):
     path = tmp_path / "config" / "settings.json"
     service = SettingsService(path)
     original = settings(tmp_path)
     await service.save(original)
     assert load_settings(path).username == "user"
-    assert load_settings(path).password.get_secret_value() == "pass"
+    assert load_settings(path).password.get_secret_value() == "test-password-123!"
     assert load_settings(path).torbox_api_token.get_secret_value() == "test"
     values = original.model_dump()
     values["qbittorrent"]["username"] = "changed"

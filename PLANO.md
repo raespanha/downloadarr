@@ -167,7 +167,7 @@ Um download real via Sonarr, usando o nosso serviço, atinge velocidade agregada
 - Fase 4: dashboard, controlos operacionais, telemetria, incidentes e exportação implementados.
 - Fases 5–6: fluxo Arr validado e serviço Docker ativo; lock de processo, SQLite WAL durável,
   readiness, backup/restore, doctor, imagem/dependências fixadas e Compose endurecido implementados.
-- Layout de media unificado: `C:\plex_media` é montado como `/media` em Downloadarr,
+- Layout de media unificado: um diretório partilhado é montado como `/media` em Downloadarr,
   Sonarr, Radarr e Bazarr; staging em `/media/downloads` e bibliotecas em
   `/media/series` e `/media/movies`, permitindo imports por rename/hardlink no mesmo filesystem.
 - Pendente antes de declarar produção estável: executar o benchmark e o ensaio de

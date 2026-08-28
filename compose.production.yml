@@ -11,7 +11,7 @@ services:
       - "${DOWNLOADARR_BIND:-127.0.0.1}:6500:6500"
     volumes:
       - ${DOWNLOADARR_CONFIG_PATH:?Set local config path}:/config:rw
-      - ${DOWNLOADARR_MEDIA_PATH:?Set shared Arr media path}:/torbox:rw
+      - ${DOWNLOADARR_MEDIA_PATH:?Set shared Arr media path}:/downloads:rw
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m

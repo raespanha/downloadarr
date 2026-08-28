@@ -6,7 +6,21 @@ build-backend = "hatchling.build"
 name = "downloadarr"
 version = "0.1.0"
 description = "Reliable resumable multi-connection HTTP downloader"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "raespanha" }]
 requires-python = ">=3.12,<3.14"
+keywords = ["sonarr", "radarr", "torbox", "downloader", "qbittorrent"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Web Environment",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Internet :: WWW/HTTP",
+]
 dependencies = [
   "aiohttp>=3.10,<4",
   "aiofiles>=24.1,<26",
@@ -18,6 +32,12 @@ dependencies = [
   "python-multipart>=0.0.20,<1",
   "jinja2>=3.1,<4",
 ]
+
+[project.urls]
+Homepage = "https://github.com/raespanha/downloadarr"
+Documentation = "https://github.com/raespanha/downloadarr/tree/main/docs"
+Issues = "https://github.com/raespanha/downloadarr/issues"
+Source = "https://github.com/raespanha/downloadarr"
 
 [project.optional-dependencies]
 test = ["pytest>=8.3", "pytest-asyncio>=0.24", "aiohttp>=3.10", "httpx>=0.28,<1"]
