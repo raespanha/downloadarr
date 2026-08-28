@@ -64,6 +64,9 @@ excluded from the Docker build context.
 See [settings documentation](docs/settings.md) for the schema and complete
 environment-variable list.
 
+Planned work and the boundary for a stable release are tracked in the
+[roadmap](docs/roadmap.md).
+
 ## Development
 
 Python 3.12 or 3.13 is supported. Dependencies are hash-locked.
