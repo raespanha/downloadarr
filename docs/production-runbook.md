@@ -12,10 +12,11 @@ Downloadarr enforces its one-process architecture with an OS advisory lock next 
 A second process, Uvicorn worker, or replica exits before migration or polling. The lock file is
 not deleted; kernel ownership makes a stale file harmless after a crash.
 
-Use `compose.production.yml` with an immutable image tag/digest. It runs non-root, drops all
+Use the repository's `compose.yml`. It builds the local image, runs non-root, drops all
 capabilities, uses a read-only root filesystem, constrains resources and logs, and binds the UI
-to `127.0.0.1` by default. Put TLS and LAN authentication at a trusted reverse proxy. Do not
-expose port 6500 directly to the Internet.
+to `127.0.0.1` by default. Record the source commit and resulting image digest for each
+deployment. Put TLS and LAN authentication at a trusted reverse proxy. Do not expose port 6500
+directly to the Internet.
 
 ## Preflight and health
 
@@ -36,10 +37,11 @@ outage does not fail readiness and therefore cannot cause a provider-outage rest
 
 ## Secrets
 
-Production Compose uses `TORBOX_API_TOKEN_FILE`. The same `_FILE` convention is supported for
-`DOWNLOADARR_PASSWORD`, `DOWNLOADARR_API_KEY`, and Sonarr/Radarr API keys. Keep secret files and
-settings mode `0600`; environment values remain suitable only for development because container
-metadata exposes them. Rotate any token that appeared in chat, shell history, or logs.
+The `_FILE` convention is supported for `TORBOX_API_TOKEN`, `DOWNLOADARR_PASSWORD`,
+`DOWNLOADARR_API_KEY`, and Sonarr/Radarr API keys. To use it, mount each secret read-only, remove
+the corresponding plain value from `.env`, and set its `_FILE` variable to the container path.
+Keep secret files and settings mode `0600`; plain environment values can be exposed through
+container metadata. Rotate any token that appeared in chat, shell history, or logs.
 
 ## Backup, verify, and restore
 
@@ -68,7 +70,7 @@ its matching pre-upgrade database/settings backup. Measure RPO/RTO on the target
 ## Upgrade and shutdown
 
 1. Confirm there is no unintended active work and create/verify an online backup.
-2. Pull the immutable versioned image and recreate exactly one service.
+2. Check out the intended source revision, rebuild the image, and recreate exactly one service.
 3. Require `/readyz`, then check schema, UI, Arr connection tests, and one legal smoke import.
 4. Keep a 120-second stop grace period. SIGTERM marks readiness false, cancels and awaits active
    range tasks/checkpoints, closes provider/database resources, then releases the lock.

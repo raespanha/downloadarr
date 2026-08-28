@@ -29,6 +29,10 @@ generate stalled alerts.
 and recent lifecycle events. The dashboard treats a heartbeat older than 90 seconds as stale, so an
 empty alert list cannot silently masquerade as a healthy monitor.
 
+The dashboard presents these values in the **Operational health** tab and paginates recent lifecycle
+events at 10 rows per page. The sibling **Transfer performance** tab combines successful and failed
+events in one status-filtered, chronological table, also paginated at 10 rows per page.
+
 ## Segmentation and interpretation
 
 Events and incidents snapshot the Sonarr/Radarr service and the Arr-reported indexer. Early `Unknown`

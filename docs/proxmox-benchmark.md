@@ -1,7 +1,7 @@
 # Proxmox performance benchmark
 
-This benchmark distinguishes container overhead from CDN variance and storage bottlenecks.
-Windows Docker Desktop results do not predict native Linux/Proxmox performance.
+This benchmark distinguishes container overhead from CDN variance and storage bottlenecks on
+the supported native Linux/Proxmox deployment.
 
 ## Method
 

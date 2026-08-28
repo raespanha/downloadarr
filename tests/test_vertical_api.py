@@ -243,6 +243,7 @@ async def test_dashboard_login_and_settings_save(tmp_path):
                                       follow_redirects=False)
             assert valid.status_code == 303 and "SID=" in valid.headers["set-cookie"]
             csrf = app.state.auth_sessions.csrf(client.cookies.get("SID"))
+            download_path = tmp_path / "dashboard-downloads"
             response = await client.post("/ui/settings", data={
                 "csrf_token": csrf,
                 "torbox_token": "replacement-secret",
@@ -253,8 +254,8 @@ async def test_dashboard_login_and_settings_save(tmp_path):
                 "minimum_file_size_mb": "50",
                 "allowed_file_extensions": ".mkv, MP4",
                 "blocked_file_extensions": ".zip; .rar",
-                "download_path": "/torbox",
-                "categories": '{"tv-sonarr":"/torbox/tv-sonarr"}',
+                "download_path": str(download_path),
+                "categories": json.dumps({"tv-sonarr": str(download_path / "tv-sonarr")}),
             }, follow_redirects=False)
             assert response.status_code == 303 and response.headers["location"] == "/?saved=1"
             restored = load_settings(service.path)

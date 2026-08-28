@@ -18,8 +18,12 @@ def test_base32_hash_normalizes():
     assert parse_magnet(f"magnet:?xt=urn:btih:{encoded}").info_hash == HASH
 
 
-@pytest.mark.parametrize("uri", ["https://example.test", "magnet:?dn=nohash",
-                                  "magnet:?xt=urn:btih:bad"])
+@pytest.mark.parametrize("uri", [
+    "https://example.test",
+    "magnet:?dn=nohash",
+    "magnet:?xt=urn:btih:bad",
+    "magnet:?xt=urn:btih:00000000000000000000000000000000",
+])
 def test_invalid_magnets(uri):
     with pytest.raises(MagnetError):
         parse_magnet(uri)
