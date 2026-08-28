@@ -270,8 +270,11 @@ process. Encrypting them with a key stored beside the application would not
 materially improve security. Protect the `/config` directory with operating
 system permissions and encrypt backups at the storage layer.
 
-Advanced deployments can keep secrets out of JSON entirely through environment
-variables or future Docker secret-file support.
+Deployments can keep secrets out of JSON through environment variables or the
+implemented `_FILE` variants. The file variables are
+`DOWNLOADARR_PASSWORD_FILE`, `DOWNLOADARR_API_KEY_FILE`,
+`TORBOX_API_TOKEN_FILE`, `DOWNLOADARR_SONARR_API_KEY_FILE`, and
+`DOWNLOADARR_RADARR_API_KEY_FILE`.
 
 ## Telemetry settings
 

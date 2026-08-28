@@ -17,6 +17,12 @@ The first dashboard slice provides:
 - masked TorBox and Arr credentials; and
 - atomically saved download settings and category paths.
 
+The **Monitoring & logs** section is divided into **Operational health** and
+**Transfer performance** tabs. Recent lifecycle events are paginated at 10 rows
+per page. Successful transfers and failures share one chronological **Recent
+transfers** table with a status column, `All`/`Succeeded`/`Failed` filters, and
+10 rows per page.
+
 The page polls the local API every two seconds. Job names and provider errors
 are inserted as text rather than HTML. State-changing forms reject cross-origin
 browser requests and the session cookie is HTTP-only with strict same-site

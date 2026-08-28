@@ -15,27 +15,27 @@ external state, so this command is never run in normal tests or CI.
 
 ## Run it
 
-Install the package and supply process-scoped environment variables. Keep real
-values out of Git, screenshots, shell history, and test reports.
+Install the package on Linux and supply process-scoped environment variables.
+Keep real values out of Git, screenshots, shell history, and test reports.
 
-```powershell
-$env:DOWNLOADARR_E2E_ARR_URL = "http://127.0.0.1:8989"
-$env:DOWNLOADARR_E2E_ARR_API_KEY = "<arr-api-key>"
-$env:DOWNLOADARR_E2E_DOWNLOADARR_URL = "http://127.0.0.1:6500"
-$env:DOWNLOADARR_E2E_USERNAME = "<downloadarr-user>"
-$env:DOWNLOADARR_E2E_PASSWORD = "<downloadarr-password>"
+```bash
+export DOWNLOADARR_E2E_ARR_URL="http://127.0.0.1:8989"
+export DOWNLOADARR_E2E_ARR_API_KEY="<arr-api-key>"
+export DOWNLOADARR_E2E_DOWNLOADARR_URL="http://127.0.0.1:6500"
+export DOWNLOADARR_E2E_USERNAME="<downloadarr-user>"
+export DOWNLOADARR_E2E_PASSWORD="<downloadarr-password>"
 
-downloadarr-verify-arr-cleanup `
-  --arr sonarr `
-  --hash <40-character-torrent-info-hash> `
-  --timeout 7200 `
-  --path-map "/downloads=C:\media\downloads" `
-  --path-map "/series=C:\media\series"
+downloadarr-verify-arr-cleanup \
+  --arr sonarr \
+  --hash <40-character-torrent-info-hash> \
+  --timeout 7200 \
+  --path-map "/downloads=/srv/media/downloads" \
+  --path-map "/series=/srv/media/series"
 ```
 
 For Radarr use `--arr radarr`, its URL/API key, and the relevant library map,
-for example `/movies=C:\media\movies`. Start the command as soon as the chosen
-release appears in Downloadarr.
+for example `/movies=/srv/media/movies`. Start the command as soon as the
+chosen release appears in Downloadarr.
 
 The command fails on authentication/API errors, early removal, mismatched file
 records, missing mapped output, retained staging data, or timeout. If the

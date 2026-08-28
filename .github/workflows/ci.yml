@@ -36,5 +36,6 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - run: DOWNLOADARR_ENV_FILE=.env.example DOWNLOADARR_MEDIA_PATH=/tmp/downloadarr docker compose config --quiet
       - run: docker build --pull=false -t downloadarr:ci .
       - run: docker run --rm --entrypoint python downloadarr:ci -c "import os; assert os.getuid() != 0; import downloadarr"

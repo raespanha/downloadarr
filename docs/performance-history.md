@@ -32,8 +32,9 @@ The authenticated dashboard provides:
 
 - 7-day, 30-day, and all-time filters;
 - average and peak speed timelines;
-- delivered bytes, download count, and retry totals; and
-- a recent-transfer table with size, speeds, connections, and retries.
+- delivered bytes, download count, and retry totals;
+- a unified recent-transfer table containing successful and failed events,
+  with status filters and 10 rows per page;
 - service and indexer filters and comparison summaries; and
 - persistent failure events, their pipeline stage, and recovered/open status.
 
