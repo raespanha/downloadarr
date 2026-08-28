@@ -18,6 +18,7 @@ from ..db.models import (AlertInstance, Category, ControlEvent, ControlState,
 from ..downloader import Downloader
 from ..errors import DownloadError
 from ..magnets import MagnetInfo
+from ..settings import ALWAYS_BLOCKED_FILE_EXTENSIONS, DEFAULT_MEDIA_EXTENSIONS
 from ..torrents import TorrentInfo
 from ..providers.base import ProviderError, TorrentProvider
 from ..state import DownloadResult
@@ -32,6 +33,8 @@ class JobService:
                  max_backoff: float = 300.0, download_path: Path = Path("/downloads"),
                  download_connections: int = 4, download_transfer_mode: str = "auto",
                  minimum_file_size_mb: int = 0,
+                 allowed_file_extensions: list[str] | tuple[str, ...] | None = None,
+                 blocked_file_extensions: list[str] | tuple[str, ...] | None = None,
                  max_job_failures: int = 5,
                  downloader: Downloader | None = None,
                  source_resolver: SourceResolver | None = None) -> None:
@@ -40,13 +43,49 @@ class JobService:
         self.max_backoff = max_backoff
         self.max_job_failures = max_job_failures
         self.minimum_file_size_bytes = minimum_file_size_mb * 1024 * 1024
+        allowed = (DEFAULT_MEDIA_EXTENSIONS if allowed_file_extensions is None
+                   else allowed_file_extensions)
+        self.allowed_file_extensions = frozenset(value.lower() for value in allowed)
+        self.blocked_file_extensions = frozenset(
+            value.lower() for value in (blocked_file_extensions or ()))
         self.download_path = Path(download_path)
         self._active_tasks: dict[str, asyncio.Task] = {}
         self._controlling: set[str] = set()
         self._task_lock = asyncio.Lock()
         self.source_resolver = source_resolver
+        self._managed_downloader = downloader is None
         self.downloader = downloader or Downloader(DownloadConfig(
             connections=download_connections, transfer_mode=download_transfer_mode))
+
+    def apply_download_settings(self, *, download_path: Path, connections: int,
+                                transfer_mode: str, minimum_file_size_mb: int,
+                                allowed_file_extensions: list[str],
+                                blocked_file_extensions: list[str]) -> None:
+        """Apply settings to future delivery work without disturbing active transfers."""
+        self.download_path = Path(download_path)
+        self.minimum_file_size_bytes = minimum_file_size_mb * 1024 * 1024
+        self.allowed_file_extensions = frozenset(
+            value.lower() for value in allowed_file_extensions)
+        self.blocked_file_extensions = frozenset(
+            value.lower() for value in blocked_file_extensions)
+        if self._managed_downloader:
+            current = self.downloader.config
+            self.downloader = Downloader(DownloadConfig(
+                connections=connections,
+                transfer_mode=transfer_mode,
+                retries=current.retries,
+                connect_timeout=current.connect_timeout,
+                read_timeout=current.read_timeout,
+                stall_timeout=current.stall_timeout,
+                minimum_chunk_rate=current.minimum_chunk_rate,
+                block_size=current.block_size,
+                segments_per_connection=current.segments_per_connection,
+                checkpoint_bytes=current.checkpoint_bytes,
+                checkpoint_interval=current.checkpoint_interval,
+                backoff_base=current.backoff_base,
+                backoff_max=current.backoff_max,
+                resume=current.resume,
+            ))
 
     async def add_magnet(self, magnet: MagnetInfo, category_name: str | None) -> Job:
         return await self._add_source(magnet.info_hash, magnet.display_name, category_name,
@@ -593,6 +632,12 @@ class JobService:
                 raise ValueError(
                     "no TorBox files meet the configured minimum file size "
                     f"({self.minimum_file_size_bytes // (1024 * 1024)} MB)")
+            files = [item for item in files if self._file_extension_allowed(item.path)]
+            if not files:
+                allowed = ", ".join(sorted(self.allowed_file_extensions)) or "any non-blocked"
+                raise ValueError(
+                    "no TorBox files match the configured file extension policy "
+                    f"(allowed: {allowed})")
             relative_paths = _delivery_paths(job.name or job.info_hash, files)
             job.delivery_files = [DeliveryFile(
                 provider_file_id=item.file_id, relative_path=relative,
@@ -610,9 +655,16 @@ class JobService:
         base = Path(job.category.save_path) if job.category else self.download_path
         total = sum(item.size for item in job.delivery_files)
         for item in job.delivery_files:
+            if not self._file_extension_allowed(item.relative_path):
+                raise ValueError(
+                    f"file extension blocked by download policy: {Path(item.relative_path).suffix}")
             destination = _safe_destination(base, item.relative_path)
             receipt = destination.with_name(destination.name + ".downloadarr.receipt.json")
             result = None
+
+            async def url_provider(refresh: bool, file_id=item.provider_file_id) -> str:
+                return await self.provider.request_download(job.provider_job.remote_id, file_id)
+
             if destination.exists():
                 if (destination.is_file() and destination.stat().st_size == item.size
                         and item.state == "completed"):
@@ -623,8 +675,12 @@ class JobService:
                     if result is not None:
                         item.downloaded, item.state, item.error_message = item.size, "completed", None
                     else:
-                        raise ValueError(
-                            f"unverified delivery destination already exists: {item.relative_path}")
+                        result = await self.downloader.verify_existing(
+                            url_provider, destination, item.size)
+                        if result is None:
+                            raise ValueError(
+                                "existing delivery destination does not match provider samples: "
+                                f"{item.relative_path}")
                 else:
                     raise ValueError(f"delivery destination already exists: {item.relative_path}")
             if result is None:
@@ -632,14 +688,13 @@ class JobService:
             prior = sum(value.downloaded for value in job.delivery_files if value is not item)
             last_checkpoint = 0.0
 
-            async def url_provider(refresh: bool, file_id=item.provider_file_id) -> str:
-                return await self.provider.request_download(job.provider_job.remote_id, file_id)
-
             async def progress(value) -> None:
                 nonlocal last_checkpoint
                 item.downloaded = min(value.downloaded_bytes, item.size)
                 job.progress = ((prior + item.downloaded) / total if total else 1.0)
-                speed = value.session_downloaded_bytes / value.elapsed if value.elapsed else 0
+                speed = value.speed_bytes_per_second
+                if not speed and value.elapsed:
+                    speed = value.session_downloaded_bytes / value.elapsed
                 job.download_speed = int(speed)
                 remaining = max(total - prior - item.downloaded, 0)
                 job.eta = int(remaining / speed) if speed else None
@@ -657,35 +712,42 @@ class JobService:
             completed = sum(value.downloaded for value in job.delivery_files)
             job.progress = completed / total if total else 1.0
             job.download_speed = int(result.average_speed)
-            session.add(TransferHistory(
-                job_id=job.id,
-                provider_file_id=item.provider_file_id,
-                info_hash=job.info_hash,
-                name=job.name or job.info_hash,
-                category=job.category.name if job.category else "",
-                relative_path=item.relative_path,
-                provider=job.provider_job.provider,
-                remote_id=job.provider_job.remote_id,
-                status="completed",
-                service=job.source_service,
-                indexer=job.source_indexer or "Unknown",
-                indexer_id=job.source_indexer_id,
-                total_bytes=result.byte_count,
-                transferred_bytes=(result.session_byte_count
-                                   if result.session_byte_count is not None
-                                   else result.byte_count),
-                elapsed=result.elapsed,
-                average_speed=int(result.average_speed),
-                peak_speed=int(result.peak_speed),
-                connections=result.connections,
-                used_ranges=result.used_ranges,
-                range_requests=result.range_requests,
-                retry_count=result.retry_count,
-                resumed=result.resumed,
-                cdn_host=result.cdn_host,
-                started_at=transfer_started_at,
-                completed_at=_now(),
-            ))
+            if not result.reused_existing:
+                session.add(TransferHistory(
+                    job_id=job.id,
+                    provider_file_id=item.provider_file_id,
+                    info_hash=job.info_hash,
+                    name=job.name or job.info_hash,
+                    category=job.category.name if job.category else "",
+                    relative_path=item.relative_path,
+                    provider=job.provider_job.provider,
+                    remote_id=job.provider_job.remote_id,
+                    status="completed",
+                    service=job.source_service,
+                    indexer=job.source_indexer or "Unknown",
+                    indexer_id=job.source_indexer_id,
+                    total_bytes=result.byte_count,
+                    transferred_bytes=(result.session_byte_count
+                                       if result.session_byte_count is not None
+                                       else result.byte_count),
+                    elapsed=result.elapsed,
+                    average_speed=int(result.average_speed),
+                    peak_speed=int(result.peak_speed),
+                    connections=result.connections,
+                    used_ranges=result.used_ranges,
+                    range_requests=result.range_requests,
+                    retry_count=result.retry_count,
+                    resumed=result.resumed,
+                    cdn_host=result.cdn_host,
+                    started_at=transfer_started_at,
+                    completed_at=_now(),
+                ))
+            else:
+                self._lifecycle(
+                    session, job, "existing_file_reused",
+                    event_key=f"existing_file_reused:{job.id}:{item.provider_file_id}",
+                    from_phase=job.state, to_phase=job.state, outcome="sample_verified",
+                    detail=f"Reused exact-size file after {result.range_requests} remote samples")
             await session.commit()
             receipt.unlink(missing_ok=True)
             logger.info(
@@ -707,6 +769,14 @@ class JobService:
         job.progress = 1.0
         job.download_speed, job.eta = 0, 0
         job.completed_at, job.next_poll_at = _now(), None
+
+    def _file_extension_allowed(self, name: str) -> bool:
+        extension = PurePosixPath(str(name).replace("\\", "/")).suffix.lower()
+        if extension in ALWAYS_BLOCKED_FILE_EXTENSIONS:
+            return False
+        if extension in self.blocked_file_extensions:
+            return False
+        return not self.allowed_file_extensions or extension in self.allowed_file_extensions
 
     async def pause(self, hashes: list[str], actor: str = "qbittorrent") -> None:
         await self._control(hashes, "pause", actor)

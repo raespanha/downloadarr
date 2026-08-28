@@ -30,6 +30,7 @@ class TransferProgress:
     chunks_done: int
     chunks_total: int
     session_downloaded_bytes: int = 0
+    speed_bytes_per_second: float = 0.0
 
 
 ProgressCallback = Callable[[TransferProgress], Awaitable[None] | None]
@@ -49,3 +50,4 @@ class DownloadResult:
     retry_count: int = 0
     peak_speed: float = 0.0
     connections: int = 1
+    reused_existing: bool = False

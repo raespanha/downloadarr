@@ -98,12 +98,17 @@ class FakeDownloader:
 class FakeSourceResolver:
     def __init__(self, indexer="The Pirate Bay (Prowlarr)", indexer_id=7):
         self.indexer, self.indexer_id, self.closed = indexer, indexer_id, False
+        self.blocklisted = []
 
     def service_for(self, category):
         return {"tv-sonarr": "sonarr", "radarr": "radarr"}.get(category, "other")
 
     async def resolve(self, category, info_hash):
         return SourceMetadata(self.service_for(category), self.indexer, self.indexer_id)
+
+    async def blocklist(self, category, info_hash):
+        self.blocklisted.append((category, info_hash))
+        return True
 
     async def close(self):
         self.closed = True
@@ -185,6 +190,41 @@ async def test_dashboard_requires_login_and_lists_jobs_without_secrets(tmp_path)
             assert jobs[0]["files"] == []
             assert 'data-tab="monitoring"' in page.text
             assert 'id="downloads-view"' in page.text
+            assert 'id="remove-dialog"' in page.text
+            assert "Remove download?" in page.text
+            assert "Sonarr/Radarr Activity" in page.text
+            assert "Plex library files are kept" in page.text
+            assert "Confirm and blacklist" in page.text
+            assert "confirm(" not in page.text
+            assert 'id="lifecycle-pagination"' in page.text
+            assert 'data-monitor-tab="operational"' in page.text
+            assert 'data-monitor-tab="performance"' in page.text
+            assert 'id="transfer-pagination"' in page.text
+            assert 'data-transfer-status="all"' in page.text
+            assert 'data-transfer-status="succeeded"' in page.text
+            assert 'data-transfer-status="failed"' in page.text
+            assert "const MONITOR_TABLE_PAGE_SIZE=10" in page.text
+
+
+async def test_dashboard_remove_and_blacklist_coordinates_arr_before_cleanup(tmp_path):
+    resolver = FakeSourceResolver()
+    async with client_for(tmp_path, source_resolver=resolver) as (client, app, provider):
+        await login(client)
+        await app.state.job_service.ensure_category(
+            "tv-sonarr", str(tmp_path / "downloads" / "tv-sonarr")
+        )
+        await client.post("/api/v2/torrents/add", data={"urls": MAGNET,
+                                                        "category": "tv-sonarr"})
+        csrf = app.state.auth_sessions.csrf(client.cookies.get("SID"))
+        response = await client.post(
+            f"/ui/jobs/{HASH}/remove",
+            data={"csrf_token": csrf, "blocklist": "true", "deleteFiles": "false"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+        assert response.headers["location"] == "/"
+        assert resolver.blocklisted == [("tv-sonarr", HASH)]
+        assert await app.state.job_service.job(HASH) is None
 
 
 async def test_dashboard_login_and_settings_save(tmp_path):
@@ -207,7 +247,10 @@ async def test_dashboard_login_and_settings_save(tmp_path):
                 "transfer_mode": "parallel",
                 "connections": "12",
                 "provider_max_connections": "4",
+                "simultaneous_downloads": "3",
                 "minimum_file_size_mb": "50",
+                "allowed_file_extensions": ".mkv, MP4",
+                "blocked_file_extensions": ".zip; .rar",
                 "download_path": "/torbox",
                 "categories": '{"tv-sonarr":"/torbox/tv-sonarr"}',
             }, follow_redirects=False)
@@ -217,6 +260,19 @@ async def test_dashboard_login_and_settings_save(tmp_path):
             assert restored.download.connections == 12
             assert restored.download.transfer_mode == "parallel"
             assert restored.download.minimum_file_size_mb == 50
+            assert restored.download.allowed_file_extensions == [".mkv", ".mp4"]
+            assert restored.download.blocked_file_extensions == [".zip", ".rar"]
+            assert restored.provider_concurrency == 3
+            assert app.state.settings.download.minimum_file_size_mb == 50
+            assert app.state.job_service.minimum_file_size_bytes == 50 * 1024 * 1024
+            assert app.state.job_service.allowed_file_extensions == {".mkv", ".mp4"}
+            assert app.state.job_service.blocked_file_extensions == {".zip", ".rar"}
+            assert app.state.poller.concurrency == 3
+            page = await client.get(response.headers["location"])
+            assert "Settings saved and applied" in page.text
+            assert "Restart Downloadarr" not in page.text
+            assert "setTimeout(()=>dismissNotice(notice),6000)" in page.text
+            assert "Simultaneous downloads" in page.text
 
 
 async def test_minimum_file_size_filters_delivery_before_download(tmp_path):
@@ -267,6 +323,50 @@ async def test_minimum_file_size_fails_when_every_file_is_filtered(tmp_path):
             assert failed.state == JobState.FAILED.value
             assert failed.error_code == "DELIVERY_FAILED"
             assert "minimum file size" in failed.error_message
+            assert provider.download_requests == []
+
+
+async def test_file_extension_allowlist_skips_executables_before_download(tmp_path):
+    configured = settings(tmp_path)
+    provider = FakeProvider()
+    provider.torrent = ProviderTorrent(42, HASH, "Test.Release", "cached", 4_000_000,
+                                       1, 0, 0, True, True)
+    provider.files = [ProviderFile(1, "video.mkv.exe", 2_000_000),
+                      ProviderFile(2, "VIDEO.MKV", 2_000_000)]
+    app = create_app(configured, provider, start_poller=False, downloader=FakeDownloader())
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                     base_url="http://test") as client:
+            await login(client)
+            await client.post("/api/v2/torrents/add", data={"urls": MAGNET})
+            job = (await app.state.job_service.jobs())[0]
+            for _ in range(3):
+                await app.state.job_service.process(job.id)
+            prepared = await app.state.job_service.job(HASH)
+            assert [(item.provider_file_id, item.relative_path) for item in
+                    prepared.delivery_files] == [(2, "VIDEO.MKV")]
+            assert provider.download_requests == []
+
+
+async def test_executable_only_release_fails_without_requesting_url(tmp_path):
+    configured = settings(tmp_path)
+    provider = FakeProvider()
+    provider.torrent = ProviderTorrent(42, HASH, "Silo.Release", "cached", 2_000_000,
+                                       1, 0, 0, True, True)
+    provider.files = [ProviderFile(1, "Silo.S03E07.mkv.exe", 2_000_000)]
+    app = create_app(configured, provider, start_poller=False, downloader=FakeDownloader())
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                     base_url="http://test") as client:
+            await login(client)
+            await client.post("/api/v2/torrents/add", data={"urls": MAGNET})
+            job = (await app.state.job_service.jobs())[0]
+            for _ in range(3):
+                await app.state.job_service.process(job.id)
+            failed = await app.state.job_service.job(HASH)
+            assert failed.state == JobState.FAILED.value
+            assert failed.error_code == "DELIVERY_FAILED"
+            assert "file extension policy" in failed.error_message
             assert provider.download_requests == []
 
 

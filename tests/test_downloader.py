@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import json
 from pathlib import Path
@@ -292,3 +293,66 @@ async def test_premature_eof_retries_from_partial_offset(server, tmp_path):
         await provider(url), tmp_path / "out")
     assert attempts >= 3
     assert result.path.read_bytes() == DATA
+
+
+async def test_slow_trickling_range_is_retried_from_partial_offset(server, tmp_path):
+    attempts = 0
+
+    async def handler(request):
+        nonlocal attempts
+        start, end = map(int, request.headers["Range"].removeprefix("bytes=").split("-"))
+        if (start, end) == (0, 0):
+            return web.Response(status=206, body=DATA[:1], headers={
+                "Content-Range": f"bytes 0-0/{len(DATA)}"})
+        attempts += 1
+        if attempts == 1:
+            response = web.StreamResponse(status=206, headers={
+                "Content-Range": f"bytes {start}-{end}/{len(DATA)}",
+                "Content-Length": str(end - start + 1),
+            })
+            await response.prepare(request)
+            await response.write(DATA[start:start + 1024])
+            await asyncio.sleep(0.06)
+            try:
+                await response.write(DATA[start + 1024:start + 2048])
+                await response.write_eof()
+            except ConnectionResetError:
+                pass
+            return response
+        return web.Response(status=206, body=DATA[start:end + 1], headers={
+            "Content-Range": f"bytes {start}-{end}/{len(DATA)}"})
+
+    url = await server(handler)
+    progress = []
+    result = await Downloader(DownloadConfig(
+        connections=1, transfer_mode="parallel", block_size=1024,
+        stall_timeout=0.05, minimum_chunk_rate=10_000_000,
+        backoff_base=0)).download(await provider(url), tmp_path / "out", progress.append)
+    assert result.path.read_bytes() == DATA
+    assert attempts >= 2
+    assert result.retry_count >= 1
+    assert any(value.speed_bytes_per_second > 0 for value in progress)
+
+
+async def test_existing_exact_size_file_is_verified_against_remote_samples(server, tmp_path):
+    data = DATA * 4
+    url = await server(range_handler(data))
+    destination = tmp_path / "existing.bin"
+    destination.write_bytes(data)
+    result = await Downloader(DownloadConfig(backoff_base=0)).verify_existing(
+        await provider(url), destination, len(data))
+    assert result is not None
+    assert result.reused_existing
+    assert result.byte_count == len(data)
+    assert result.range_requests > 1
+    assert result.session_byte_count > 0
+
+
+async def test_existing_same_size_file_with_different_bytes_is_rejected(server, tmp_path):
+    data = DATA * 4
+    url = await server(range_handler(data))
+    destination = tmp_path / "existing.bin"
+    destination.write_bytes(bytes(len(data)))
+    result = await Downloader(DownloadConfig(backoff_base=0)).verify_existing(
+        await provider(url), destination, len(data))
+    assert result is None

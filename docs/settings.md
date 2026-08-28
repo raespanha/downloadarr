@@ -6,6 +6,20 @@ keeps every file. The threshold applies when a newly ready torrent's file list i
 does not remove files from a transfer already in progress. If every file is below the threshold,
 the job fails visibly instead of reporting a false successful download.
 
+`download.allowed_file_extensions` is the primary safety boundary. Only files
+whose final suffix appears in this list are selected for local delivery. The
+default list contains common video formats. `download.blocked_file_extensions`
+adds a configurable denylist. Executable and script formats such as `.exe`,
+`.scr`, `.bat`, `.cmd`, `.msi`, `.ps1`, `.vbs`, and `.js` are always blocked,
+even if the allowlist is empty or explicitly contains them. Filtering happens
+before Downloadarr asks TorBox for a signed download URL.
+
+Existing final files are handled conservatively. If the local size matches the
+provider size, Downloadarr compares distributed byte samples (up to about 4
+MiB per file) against the provider before reusing it. Files with different
+sizes or samples are not overwritten or deleted. Legacy partial files such as
+`.download` are not considered completed destinations.
+
 ## Goals
 
 Downloadarr settings are designed to be:
@@ -52,6 +66,9 @@ Backing up `/config` preserves both settings and the SQLite database.
     "path": "/downloads",
     "connections": 8,
     "provider_max_connections": 4,
+    "minimum_file_size_mb": 0,
+    "allowed_file_extensions": [".mkv", ".mp4", ".avi"],
+    "blocked_file_extensions": [],
     "transfer_mode": "auto",
     "categories": {
       "tv-sonarr": "/downloads/tv-sonarr",
@@ -106,6 +123,9 @@ the image working directory and bypass the mounted `/config` directory.
 | `path` | path | Local/container-visible completed download root |
 | `connections` | integer | Between 1 and 256 |
 | `provider_max_connections` | integer | Provider-specific connection ceiling; TorBox recommends 4 |
+| `minimum_file_size_mb` | integer | Files below this size are skipped; `0` keeps every file |
+| `allowed_file_extensions` | string list | Only these suffixes are delivered; empty allows any non-blocked suffix |
+| `blocked_file_extensions` | string list | Additional suffixes to reject; executable/script formats are always rejected |
 | `transfer_mode` | string | `auto`, `sequential`, or `parallel`; `auto` uses a full GET for fresh files |
 | `categories` | object | Category names mapped to container-visible save paths |
 
@@ -135,10 +155,18 @@ version changes from the UI.
 
 | Field | Type | Rules |
 |---|---|---|
-| `provider_concurrency` | integer | Between 1 and 64 |
+| `provider_concurrency` | integer | Between 1 and 64; shown in the UI as **Simultaneous downloads** |
 | `poll_interval` | number | Positive seconds for active jobs |
 | `queued_poll_interval` | number | Positive seconds for queued jobs |
 | `max_poll_backoff` | number | Positive retry ceiling in seconds |
+
+The scheduler continuously admits work up to `provider_concurrency`; it does
+not wait for a long-running transfer to finish before discovering later jobs.
+Each locally delivered file may independently use up to
+`download.provider_max_connections` HTTP connections, so the approximate
+maximum CDN connection count is the product of those two values. Reducing the
+simultaneous-download limit does not cancel running jobs; it only delays new
+admissions until the active count falls below the new limit.
 
 ### Sonarr and Radarr metadata enrichment
 
@@ -158,6 +186,8 @@ Environment variables take precedence over the JSON document:
 | `DOWNLOADARR_DOWNLOAD_PATH` | `download.path` |
 | `DOWNLOADARR_CONNECTIONS` | `download.connections` |
 | `DOWNLOADARR_PROVIDER_MAX_CONNECTIONS` | `download.provider_max_connections` |
+| `DOWNLOADARR_ALLOWED_FILE_EXTENSIONS` | `download.allowed_file_extensions` |
+| `DOWNLOADARR_BLOCKED_FILE_EXTENSIONS` | `download.blocked_file_extensions` |
 | `DOWNLOADARR_TRANSFER_MODE` | `download.transfer_mode` |
 | `DOWNLOADARR_USERNAME` | `qbittorrent.username` |
 | `DOWNLOADARR_PASSWORD` | `qbittorrent.password` |
@@ -223,18 +253,15 @@ values.
 
 ## Reload behavior
 
-Not every setting can safely change while jobs are active. The future UI should
-classify updates as:
+Dashboard updates are validated, written atomically, and hot-applied. Active
+HTTP transfers retain the Downloader instance and open files with which they
+started; later files and jobs use the new values. The current behavior is:
 
 | Behavior | Fields |
 |---|---|
-| Apply immediately | Poll intervals, concurrency, provider timeout |
-| Reconnect service | TorBox token/base URL, database-independent auth keys |
-| Restart required | Database URL, download root while jobs are active |
-
-The first settings API may conservatively mark every successful update as
-requiring a restart. Hot reload should be introduced only with component-level
-tests.
+| Apply immediately | Download connections/mode, file-size and extension filters, simultaneous downloads, categories, paths, telemetry limits, Arr metadata settings, and future TorBox requests after token rotation |
+| Existing transfer remains unchanged | The currently open local HTTP transfer |
+| Restart required | Database URL and other startup-only settings not exposed by the dashboard |
 
 ## Security model
 

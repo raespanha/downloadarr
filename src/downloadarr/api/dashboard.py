@@ -222,7 +222,15 @@ async def remove_job(info_hash: str, request: Request) -> Response:
     form = await request.form()
     _require_ui_mutation(request, form)
     delete_files = str(form.get("deleteFiles", "false")).lower() == "true"
+    blocklist = str(form.get("blocklist", "false")).lower() == "true"
     try:
+        if blocklist:
+            job = await request.app.state.job_service.job(info_hash)
+            resolver = request.app.state.source_resolver
+            category = job.category.name if job is not None and job.category is not None else None
+            if (job is None or not hasattr(resolver, "blocklist")
+                    or not await resolver.blocklist(category, info_hash)):
+                return RedirectResponse("/?error=blocklist_failed", status_code=303)
         await request.app.state.job_service.remove([info_hash], delete_files, actor="dashboard")
     except (ProviderError, OSError, ValueError):
         return RedirectResponse("/?error=remove_failed", status_code=303)
@@ -243,40 +251,73 @@ async def control_job(info_hash: str, command: str, request: Request) -> Respons
 async def save_settings(request: Request) -> Response:
     form = await request.form()
     _require_ui_mutation(request, form)
-    current: Settings = request.app.state.settings
-    values = current.storage_dict()
-    try:
-        values["download"]["path"] = str(form.get("download_path", "")).strip()
-        values["download"]["connections"] = int(str(form.get("connections", "")))
-        values["download"]["provider_max_connections"] = int(
-            str(form.get("provider_max_connections", "")))
-        values["download"]["minimum_file_size_mb"] = int(
-            str(form.get("minimum_file_size_mb", "0")))
-        values["download"]["transfer_mode"] = str(form.get("transfer_mode", ""))
-        values["telemetry"]["retention_days"] = int(str(form.get("retention_days", "0")))
-        values["telemetry"]["export_max_rows"] = int(str(
-            form.get("export_max_rows", "5000")))
-        categories = json.loads(str(form.get("categories", "{}")))
-        if not isinstance(categories, dict):
-            raise ValueError("categories must be an object")
-        values["download"]["categories"] = categories
-        token = str(form.get("torbox_token", "")).strip()
-        if token and token != "********":
-            values["torbox"]["api_token"] = token
-        for name in ("sonarr", "radarr"):
-            if f"{name}_url" in form:
-                values["integrations"][name]["url"] = str(
-                    form.get(f"{name}_url", "")).strip()
-            if f"{name}_category" in form:
-                values["integrations"][name]["category"] = str(
-                    form.get(f"{name}_category", "")).strip()
-            api_key = str(form.get(f"{name}_api_key", "")).strip()
-            if api_key and api_key != "********":
-                values["integrations"][name]["api_key"] = api_key
-        updated = Settings.model_validate(values)
-        await request.app.state.settings_service.save(updated)
-    except (OSError, TypeError, ValueError):
-        return RedirectResponse("/?error=settings_invalid", status_code=303)
+    async with request.app.state.settings_update_lock:
+        current: Settings = request.app.state.settings
+        values = current.storage_dict()
+        try:
+            values["download"]["path"] = str(form.get("download_path", "")).strip()
+            values["download"]["connections"] = int(str(form.get("connections", "")))
+            values["download"]["provider_max_connections"] = int(
+                str(form.get("provider_max_connections", "")))
+            values["download"]["minimum_file_size_mb"] = int(
+                str(form.get("minimum_file_size_mb", "0")))
+            values["download"]["allowed_file_extensions"] = str(
+                form.get("allowed_file_extensions", ""))
+            values["download"]["blocked_file_extensions"] = str(
+                form.get("blocked_file_extensions", ""))
+            values["download"]["transfer_mode"] = str(form.get("transfer_mode", ""))
+            if "simultaneous_downloads" in form:
+                values["scheduler"]["provider_concurrency"] = int(str(
+                    form.get("simultaneous_downloads", "")))
+            values["telemetry"]["retention_days"] = int(str(form.get("retention_days", "0")))
+            values["telemetry"]["export_max_rows"] = int(str(
+                form.get("export_max_rows", "5000")))
+            categories = json.loads(str(form.get("categories", "{}")))
+            if not isinstance(categories, dict):
+                raise ValueError("categories must be an object")
+            values["download"]["categories"] = categories
+            token = str(form.get("torbox_token", "")).strip()
+            if token and token != "********":
+                values["torbox"]["api_token"] = token
+            for name in ("sonarr", "radarr"):
+                if f"{name}_url" in form:
+                    values["integrations"][name]["url"] = str(
+                        form.get(f"{name}_url", "")).strip()
+                if f"{name}_category" in form:
+                    values["integrations"][name]["category"] = str(
+                        form.get(f"{name}_category", "")).strip()
+                api_key = str(form.get(f"{name}_api_key", "")).strip()
+                if api_key and api_key != "********":
+                    values["integrations"][name]["api_key"] = api_key
+            updated = Settings.model_validate(values)
+
+            # Validate paths and category persistence before publishing the new
+            # in-memory configuration. Existing transfers keep their open files
+            # and Downloader instance; future delivery work sees these values.
+            for path in {updated.download.path, *updated.download.categories.values()}:
+                Path(path).mkdir(parents=True, exist_ok=True)
+            for name, path in updated.download.categories.items():
+                await request.app.state.job_service.ensure_category(name, path)
+            await request.app.state.settings_service.save(updated)
+            request.app.state.job_service.apply_download_settings(
+                download_path=updated.download_path,
+                connections=min(updated.download.connections,
+                                updated.download.provider_max_connections),
+                transfer_mode=updated.download.transfer_mode,
+                minimum_file_size_mb=updated.download.minimum_file_size_mb,
+                allowed_file_extensions=updated.download.allowed_file_extensions,
+                blocked_file_extensions=updated.download.blocked_file_extensions,
+            )
+            request.app.state.poller.set_concurrency(updated.provider_concurrency)
+            resolver = request.app.state.source_resolver
+            if hasattr(resolver, "settings"):
+                resolver.settings = updated.integrations
+            provider = request.app.state.provider
+            if hasattr(provider, "update_token"):
+                provider.update_token(updated.torbox_api_token.get_secret_value())
+            request.app.state.settings = updated
+        except (OSError, TypeError, ValueError):
+            return RedirectResponse("/?error=settings_invalid", status_code=303)
     return RedirectResponse("/?saved=1", status_code=303)
 
 

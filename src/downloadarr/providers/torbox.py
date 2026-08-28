@@ -25,6 +25,11 @@ class TorBoxProvider:
         if self._owned_session:
             await self._session.close()
 
+    def update_token(self, token: str) -> None:
+        """Use a rotated token for requests created after this call."""
+        self._token = token
+        self._session.headers["Authorization"] = f"Bearer {token}"
+
     async def create_magnet(self, magnet: str) -> ProviderSubmission:
         form = aiohttp.FormData()
         form.add_field("magnet", magnet)

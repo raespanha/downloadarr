@@ -9,6 +9,8 @@ class DownloadConfig:
     retries: int = 6
     connect_timeout: float = 30.0
     read_timeout: float = 60.0
+    stall_timeout: float = 30.0
+    minimum_chunk_rate: int = 64 * 1024
     block_size: int = 256 * 1024
     segments_per_connection: int = 8
     checkpoint_bytes: int = 16 * 1024 * 1024
@@ -24,8 +26,10 @@ class DownloadConfig:
             raise ValueError("transfer_mode must be auto, sequential, or parallel")
         if self.retries < 0:
             raise ValueError("retries must be non-negative")
-        if self.connect_timeout <= 0 or self.read_timeout <= 0:
+        if self.connect_timeout <= 0 or self.read_timeout <= 0 or self.stall_timeout <= 0:
             raise ValueError("timeouts must be positive")
+        if self.minimum_chunk_rate < 0:
+            raise ValueError("minimum_chunk_rate must be non-negative")
         if self.block_size <= 0 or self.checkpoint_bytes <= 0:
             raise ValueError("block and checkpoint sizes must be positive")
         if not 1 <= self.segments_per_connection <= 1024:

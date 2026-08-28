@@ -23,10 +23,23 @@ browser requests and the session cookie is HTTP-only with strict same-site
 handling.
 
 Settings are validated and saved to the configured JSON file with the existing
-timestamped-backup behavior. They take effect after Downloadarr restarts. An
-empty token or API-key field preserves the stored secret, and current secrets
-are never rendered into the page. Optional Sonarr/Radarr URLs and API keys add
-exact indexer attribution through read-only grab-history lookups.
+timestamped-backup behavior. Dashboard settings take effect immediately for
+new work without interrupting an active HTTP transfer. **Simultaneous
+downloads** controls the continuously replenished scheduler worker limit; each
+file may still use multiple ranged connections up to the separate provider
+ceiling. An empty token or API-key field preserves the stored secret, and
+current secrets are never rendered into the page. Optional Sonarr/Radarr URLs
+and API keys add exact indexer attribution through read-only grab-history
+lookups.
+
+The settings panel also exposes a video-extension allowlist and an optional
+extra denylist. Executable/script suffixes remain permanently blocked in code,
+and rejected files never reach the signed-URL or HTTP download stages.
+
+When a destination file already exists, Downloadarr does not trust its name or
+size alone. It compares distributed byte samples with authenticated ranges from
+the provider. A matching file is reused and shown as verified; a mismatch
+remains a visible failure so existing media is never silently overwritten.
 
 Environment-managed fields are listed in the settings panel. A saved file
 cannot override those fields while their environment variables remain set.

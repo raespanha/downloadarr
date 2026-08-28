@@ -21,6 +21,7 @@ class SourceResolver(Protocol):
     def service_for(self, category: str | None) -> str: ...
     async def resolve(self, category: str | None,
                       info_hash: str) -> SourceMetadata: ...
+    async def blocklist(self, category: str | None, info_hash: str) -> bool: ...
     async def close(self) -> None: ...
 
 
@@ -89,6 +90,50 @@ class ArrMetadataResolver:
             str(indexer).strip()[:255] if indexer else None,
             parsed_id,
         )
+
+    async def blocklist(self, category: str | None, info_hash: str) -> bool:
+        """Remove a matching Arr queue item and blocklist its exact release hash."""
+        service = self.service_for(category)
+        if service == "other":
+            return False
+        configured = getattr(self.settings, service)
+        if not configured.enabled:
+            return False
+        headers = {"X-Api-Key": configured.api_key.get_secret_value()}
+        try:
+            async with self._session.get(
+                configured.url + "/api/v3/queue",
+                headers=headers,
+                params={"page": 1, "pageSize": 100,
+                        "includeUnknownSeriesItems": "true"},
+            ) as response:
+                if response.status >= 400:
+                    logger.warning("arr_blocklist_failed service=%s status=%d",
+                                   service, response.status)
+                    return False
+                payload = await response.json(content_type=None)
+            records = payload.get("records") if isinstance(payload, dict) else None
+            expected = info_hash.casefold()
+            record = next((item for item in records or [] if isinstance(item, dict)
+                           and str(item.get("downloadId") or "").casefold() == expected), None)
+            if record is None or record.get("id") is None:
+                logger.warning("arr_blocklist_failed service=%s reason=queue_item_missing",
+                               service)
+                return False
+            async with self._session.delete(
+                configured.url + f"/api/v3/queue/{record['id']}",
+                headers=headers,
+                params={"removeFromClient": "false", "blocklist": "true",
+                        "skipRedownload": "true", "changeCategory": "false"},
+            ) as response:
+                if response.status >= 400:
+                    logger.warning("arr_blocklist_failed service=%s status=%d",
+                                   service, response.status)
+                    return False
+            return True
+        except (aiohttp.ClientError, TimeoutError, ValueError):
+            logger.warning("arr_blocklist_failed service=%s reason=request_error", service)
+            return False
 
     async def close(self) -> None:
         if self._owned_session:

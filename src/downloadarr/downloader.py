@@ -54,6 +54,78 @@ class Downloader:
     def __init__(self, config: DownloadConfig | None = None) -> None:
         self.config = config or DownloadConfig()
 
+    async def verify_existing(self, url_provider: UrlProvider,
+                              destination: str | os.PathLike[str],
+                              expected_size: int) -> DownloadResult | None:
+        """Sample an existing file against authenticated remote byte ranges.
+
+        A size match alone is never accepted. Sixteen evenly distributed
+        samples (up to 256 KiB each) must match the provider object exactly.
+        """
+        destination = Path(destination).expanduser().resolve()
+        if (expected_size < 0 or not destination.is_file()
+                or destination.stat().st_size != expected_size):
+            return None
+        started = time.monotonic()
+        timeout = aiohttp.ClientTimeout(total=None, connect=self.config.connect_timeout,
+                                        sock_read=self.config.read_timeout)
+        connector = aiohttp.TCPConnector(limit=2)
+        retries = requests = sampled = 0
+        async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
+            urls = _UrlManager(url_provider)
+            _, info = await self._probe_with_retry(session, urls)
+            if info.size != expected_size or not info.supports_ranges:
+                return None
+            sample_size = min(256 * 1024, expected_size)
+            if sample_size == 0:
+                positions = [0]
+            else:
+                maximum = expected_size - sample_size
+                positions = sorted({round(index * maximum / 15) for index in range(16)})
+            for start in positions:
+                end = start + sample_size - 1
+                remote = None
+                for attempt in range(self.config.retries + 1):
+                    requests += 1
+                    try:
+                        headers = {"Range": f"bytes={start}-{end}"}
+                        if info.validator:
+                            headers["If-Range"] = info.validator
+                        async with session.get(urls.current, headers=headers,
+                                               allow_redirects=True) as response:
+                            if response.status in (401, 403):
+                                await urls.refresh(urls.generation)
+                            elif response.status == 429 or 500 <= response.status <= 599:
+                                pass
+                            else:
+                                self._validate_response(response, True, start, end, info)
+                                remote = await response.read()
+                                break
+                    except (aiohttp.ClientError, asyncio.TimeoutError):
+                        pass
+                    if attempt >= self.config.retries:
+                        raise RetryExhausted("existing-file verification exhausted retries")
+                    retries += 1
+                    await asyncio.sleep(self._delay(attempt, None))
+                if remote is None:
+                    raise RetryExhausted("existing-file verification returned no bytes")
+                local = await asyncio.to_thread(_read_file_range, destination, start, sample_size)
+                if remote != local:
+                    return None
+                sampled += len(remote)
+        elapsed = time.monotonic() - started
+        speed = sampled / elapsed if elapsed else 0.0
+        return DownloadResult(
+            destination, expected_size, elapsed, speed, True, True,
+            session_byte_count=sampled,
+            cdn_host=urlsplit(urls.current).hostname,
+            range_requests=requests,
+            retry_count=retries,
+            peak_speed=speed,
+            connections=1,
+            reused_existing=True,
+        )
+
     async def download(self, url_provider: UrlProvider, destination: str | os.PathLike[str],
                        progress_callback: ProgressCallback | None = None) -> DownloadResult:
         destination = Path(destination).expanduser().resolve()
@@ -150,7 +222,6 @@ class Downloader:
             peak_speed=max(speed_metrics["peak"], average_speed),
             connections=connections,
         )
-
     def _chunks(self, total: int, ranged: bool) -> list[ChunkState]:
         count = (min(self.config.connections * self.config.segments_per_connection, total)
                  if (ranged and self.config.transfer_mode == "parallel"
@@ -189,11 +260,23 @@ class Downloader:
                             self._validate_response(response, request_ranged, offset, chunk.end, info)
                             expected = chunk.end - offset + 1
                             received = 0
+                            rate_window_started = time.monotonic()
+                            rate_window_bytes = 0
                             async for block in response.content.iter_chunked(self.config.block_size):
                                 if received + len(block) > expected:
                                     raise ProtocolError(f"chunk {chunk.index} exceeded its byte range")
                                 await writer.write(chunk, offset + received, block)
                                 received += len(block)
+                                now = time.monotonic()
+                                rate_elapsed = now - rate_window_started
+                                if rate_elapsed >= self.config.stall_timeout:
+                                    rate = (received - rate_window_bytes) / rate_elapsed
+                                    if (self.config.minimum_chunk_rate
+                                            and rate < self.config.minimum_chunk_rate):
+                                        raise asyncio.TimeoutError(
+                                            f"chunk {chunk.index} stalled at {rate:.0f} B/s")
+                                    rate_window_started = now
+                                    rate_window_bytes = received
                                 await self._progress(callback, progress_lock, started, info.size,
                                                      chunks, initial_downloaded, speed_samples,
                                                      speed_metrics)
@@ -303,10 +386,12 @@ class Downloader:
                 speed_samples.popleft()
             sample_started, sample_bytes = speed_samples[0]
             sample_elapsed = now - sample_started
+            recent_speed = ((session_downloaded - sample_bytes) / sample_elapsed
+                            if sample_elapsed > 0 else 0.0)
             if sample_elapsed >= 0.25:
                 speed_metrics["peak"] = max(
                     speed_metrics["peak"],
-                    (session_downloaded - sample_bytes) / sample_elapsed,
+                    recent_speed,
                 )
             if callback is None:
                 return
@@ -314,7 +399,14 @@ class Downloader:
                 total, downloaded, now - started,
                 sum(c.done for c in chunks), len(chunks),
                 session_downloaded,
+                recent_speed,
             )
             result = callback(value)
             if inspect.isawaitable(result):
                 await result
+
+
+def _read_file_range(path: Path, start: int, length: int) -> bytes:
+    with path.open("rb") as handle:
+        handle.seek(start)
+        return handle.read(length)

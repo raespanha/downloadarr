@@ -40,7 +40,7 @@ Sonarr/Radarr
 │  └────────────────┘   └────────┬────────┘ │
 └─────────────────────────────────┼──────────┘
                                    ▼
-                          /torbox/<categoria>/...
+                    /media/downloads/<categoria>/...
 ```
 
 ## Stack técnica
@@ -125,6 +125,9 @@ localmente bytes que ainda estão apenas no provider.
 4. Retry automático por chunk (3 tentativas) — se uma conexão falhar a meio, só essa parte recomeça.
 5. Cálculo de velocidade: média deslizante dos últimos ~3 segundos, somando todas as conexões ativas.
 6. Configurável via dashboard: nº de conexões paralelas, tamanho mínimo de ficheiro para ativar paralelismo (ficheiros pequenos tipo .nfo não precisam).
+7. Filtrar ficheiros antes de pedir o URL assinado: allowlist de extensões de
+   vídeo configurável no dashboard, denylist adicional, e bloqueio permanente
+   de executáveis/scripts (`.exe`, `.scr`, `.bat`, `.cmd`, `.msi`, `.ps1`, etc.).
 
 ## Fases de desenvolvimento
 
@@ -164,6 +167,9 @@ Um download real via Sonarr, usando o nosso serviço, atinge velocidade agregada
 - Fase 4: dashboard, controlos operacionais, telemetria, incidentes e exportação implementados.
 - Fases 5–6: fluxo Arr validado e serviço Docker ativo; lock de processo, SQLite WAL durável,
   readiness, backup/restore, doctor, imagem/dependências fixadas e Compose endurecido implementados.
+- Layout de media unificado: `C:\plex_media` é montado como `/media` em Downloadarr,
+  Sonarr, Radarr e Bazarr; staging em `/media/downloads` e bibliotecas em
+  `/media/series` e `/media/movies`, permitindo imports por rename/hardlink no mesmo filesystem.
 - Pendente antes de declarar produção estável: executar o benchmark e o ensaio de
   backup/restore/rollback na VM Debian real em Proxmox, seguindo `docs/production-runbook.md` e
   `docs/proxmox-benchmark.md`.

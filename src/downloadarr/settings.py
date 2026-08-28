@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import re
 import shutil
 import tempfile
 from datetime import datetime, timezone
@@ -10,6 +11,44 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 from .durability import fsync_directory
+
+
+DEFAULT_MEDIA_EXTENSIONS = (
+    ".3gp", ".asf", ".avi", ".divx", ".flv", ".m2ts", ".m4v", ".mkv",
+    ".mov", ".mp4", ".mpeg", ".mpg", ".mts", ".ogm", ".ogv", ".ts",
+    ".vob", ".webm", ".wmv",
+)
+ALWAYS_BLOCKED_FILE_EXTENSIONS = frozenset({
+    ".apk", ".app", ".bat", ".bash", ".cmd", ".com", ".cpl", ".deb",
+    ".dll", ".dmg", ".exe", ".fish", ".hta", ".jar", ".js", ".jse",
+    ".lnk", ".msi", ".msp", ".pif", ".pkg", ".ps1", ".psm1", ".py",
+    ".pyw", ".reg", ".rpm", ".scr", ".sh", ".sys", ".vbe", ".vbs",
+    ".wsf", ".wsh", ".zsh",
+})
+_EXTENSION_PATTERN = re.compile(r"^\.[a-z0-9][a-z0-9._+-]{0,15}$")
+
+
+def _extensions(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        values = re.split(r"[,;\s]+", value.strip()) if value.strip() else []
+    elif isinstance(value, (list, tuple, set, frozenset)):
+        values = list(value)
+    else:
+        raise ValueError("file extensions must be a list or comma-separated string")
+    normalized: list[str] = []
+    for raw in values:
+        extension = str(raw).strip().lower()
+        if not extension:
+            continue
+        if not extension.startswith("."):
+            extension = "." + extension
+        if not _EXTENSION_PATTERN.fullmatch(extension):
+            raise ValueError(f"invalid file extension: {raw}")
+        if extension not in normalized:
+            normalized.append(extension)
+    return normalized
 
 
 class DatabaseSettings(BaseModel):
@@ -23,6 +62,9 @@ class DownloadSettings(BaseModel):
     connections: int = 8
     provider_max_connections: int = 4
     minimum_file_size_mb: int = 0
+    allowed_file_extensions: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_MEDIA_EXTENSIONS))
+    blocked_file_extensions: list[str] = Field(default_factory=list)
     transfer_mode: Literal["auto", "sequential", "parallel"] = "auto"
     categories: dict[str, str] = Field(default_factory=dict)
 
@@ -47,6 +89,11 @@ class DownloadSettings(BaseModel):
         if not 0 <= value <= 1_000_000:
             raise ValueError("minimum_file_size_mb must be between 0 and 1000000")
         return value
+
+    @field_validator("allowed_file_extensions", "blocked_file_extensions", mode="before")
+    @classmethod
+    def valid_file_extensions(cls, value: Any) -> list[str]:
+        return _extensions(value)
 
     @field_validator("categories")
     @classmethod
@@ -283,6 +330,8 @@ ENVIRONMENT_OVERRIDES: dict[str, tuple[str, ...]] = {
     "DOWNLOADARR_CONNECTIONS": ("download", "connections"),
     "DOWNLOADARR_PROVIDER_MAX_CONNECTIONS": ("download", "provider_max_connections"),
     "DOWNLOADARR_MINIMUM_FILE_SIZE_MB": ("download", "minimum_file_size_mb"),
+    "DOWNLOADARR_ALLOWED_FILE_EXTENSIONS": ("download", "allowed_file_extensions"),
+    "DOWNLOADARR_BLOCKED_FILE_EXTENSIONS": ("download", "blocked_file_extensions"),
     "DOWNLOADARR_TRANSFER_MODE": ("download", "transfer_mode"),
     "DOWNLOADARR_USERNAME": ("qbittorrent", "username"),
     "DOWNLOADARR_PASSWORD": ("qbittorrent", "password"),
@@ -416,6 +465,8 @@ def _migrate_flat_settings(raw: dict[str, Any]) -> dict[str, Any]:
         "download_path": ("download", "path"),
         "provider_max_connections": ("download", "provider_max_connections"),
         "minimum_file_size_mb": ("download", "minimum_file_size_mb"),
+        "allowed_file_extensions": ("download", "allowed_file_extensions"),
+        "blocked_file_extensions": ("download", "blocked_file_extensions"),
         "username": ("qbittorrent", "username"),
         "password": ("qbittorrent", "password"),
         "api_key": ("qbittorrent", "api_key"),

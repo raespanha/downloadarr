@@ -49,3 +49,37 @@ async def test_disabled_or_unknown_arr_source_never_uses_network():
         assert (await resolver.resolve("manual", "abc")).service == "other"
     finally:
         await resolver.close()
+
+
+async def test_arr_blocklist_removes_matching_queue_item_without_redownload():
+    seen = {}
+
+    async def queue(request):
+        return web.json_response({"records": [{"id": 17, "downloadId": "ABCDEF1234"}]})
+
+    async def delete(request):
+        seen.update(request.query)
+        seen["api_key"] = request.headers.get("X-Api-Key")
+        return web.Response(status=200)
+
+    application = web.Application()
+    application.router.add_get("/api/v3/queue", queue)
+    application.router.add_delete("/api/v3/queue/17", delete)
+    runner = web.AppRunner(application)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = site._server.sockets[0].getsockname()[1]
+    try:
+        configured = IntegrationsSettings.model_validate({
+            "sonarr": {"url": f"http://127.0.0.1:{port}", "api_key": "secret",
+                       "category": "tv-sonarr"}
+        })
+        async with ClientSession() as session:
+            resolver = ArrMetadataResolver(configured, session)
+            assert await resolver.blocklist("tv-sonarr", "abcdef1234") is True
+        assert seen == {"removeFromClient": "false", "blocklist": "true",
+                        "skipRedownload": "true", "changeCategory": "false",
+                        "api_key": "secret"}
+    finally:
+        await runner.cleanup()

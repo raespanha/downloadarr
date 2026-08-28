@@ -53,6 +53,10 @@ def create_app(settings: Settings | None = None, provider: TorrentProvider | Non
                                                           configured.download.provider_max_connections),
                                  download_transfer_mode=configured.download.transfer_mode,
                                  minimum_file_size_mb=configured.download.minimum_file_size_mb,
+                                 allowed_file_extensions=(
+                                     configured.download.allowed_file_extensions),
+                                 blocked_file_extensions=(
+                                     configured.download.blocked_file_extensions),
                                      downloader=downloader, source_resolver=actual_resolver)
             for path in {configured.download.path, *configured.download.categories.values()}:
                 Path(path).mkdir(parents=True, exist_ok=True)
@@ -86,6 +90,7 @@ def create_app(settings: Settings | None = None, provider: TorrentProvider | Non
             app.state.source_resolver = actual_resolver
             app.state.job_service = job_service
             app.state.auth_sessions = SessionStore()
+            app.state.settings_update_lock = asyncio.Lock()
             app.state.poller = poller
             app.state.process_lock = process_lock
             if start_poller:
@@ -123,8 +128,9 @@ def create_app(settings: Settings | None = None, provider: TorrentProvider | Non
             database_ready = await app.state.database.readiness()
             lock_ready = app.state.process_lock.owned
             poller_ready = (not start_poller or app.state.poller.running)
-            roots = [Path(configured.download.path),
-                     *[Path(path) for path in configured.download.categories.values()]]
+            current_settings = app.state.settings
+            roots = [Path(current_settings.download.path),
+                     *[Path(path) for path in current_settings.download.categories.values()]]
             storage_ready = all(path.exists() and os.access(path, os.W_OK) and
                                 shutil.disk_usage(path).free >= 64 * 1024 * 1024
                                 for path in roots)
