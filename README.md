@@ -9,6 +9,20 @@ authenticated monitoring dashboard.
 > Radarr import cycles, but it is not yet a stable release. Run one application
 > process, keep backups, and test with replaceable data first.
 
+## Interface preview
+
+### Downloads
+
+![Downloadarr active downloads dashboard](docs/assets/dashboard-downloads.png)
+
+*Active downloads shown with sanitized demo data.*
+
+### Transfer performance
+
+![Downloadarr transfer performance dashboard](docs/assets/dashboard-transfer-performance.png)
+
+*Transfer performance dashboard shown with sanitized demo data.*
+
 ## Features
 
 - qBittorrent-compatible authentication, submission, polling, categories,
